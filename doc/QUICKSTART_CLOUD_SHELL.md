@@ -161,17 +161,13 @@ firstnattapon/webull
 ```
 
 7. Build type: เลือก **Buildpacks**
-8. Build context directory:
-
-```text
-webull-main
-```
-
-ถ้า repo จริงวาง `main.py` และ `requirements.txt` ไว้ที่ root ให้ใช้:
+8. Build context directory: repo นี้วาง `main.py` และ `requirements.txt` ไว้ที่ root ดังนั้นให้ใช้:
 
 ```text
 /
 ```
+
+อย่าใส่ `webull-main` — โฟลเดอร์นั้นมีเฉพาะตอนโหลด zip จาก GitHub มาแตกเอง ถ้าใส่ผิด Cloud Build จะหา `requirements.txt` ไม่เจอและ build ล้มทุกครั้ง
 
 9. Function target:
 
@@ -195,6 +191,8 @@ Authentication: Require authentication
 ```
 
 ถ้าไม่มี Python 3.12 ให้เลือก Python 3.11
+
+หมายเหตุ: repo นี้มีไฟล์ `.python-version` (pin Python 3.12) และ `Procfile` (สั่งรัน `functions-framework --target=rebalance_trigger`) อยู่แล้ว Buildpacks จะอ่านสองไฟล์นี้อัตโนมัติ จึงไม่ต้องกังวลว่า Buildpacks จะเลือก Python เวอร์ชันใหม่เกินไป (เช่น 3.13 ที่ `numpy==1.26.4` ติดตั้งไม่ได้) หรือหา entrypoint ไม่เจอ
 
 ตรงแท็บ environment variables ยังไม่ต้องใส่ก็ได้ เพราะขั้นต่อไปจะใช้ Cloud Shell ช่วยใส่ให้
 
@@ -421,7 +419,61 @@ gcloud scheduler jobs resume shannon-demon-every-5m \
   --location="$REGION"
 ```
 
-## 15. Checklist มือใหม่
+## 15. แก้ปัญหา: "Building and deploying from repository (see logs)" ค้าง ไม่ Active ซักที
+
+อาการนี้แปลว่า Cloud Build ที่ trigger จาก GitHub **build ไม่สำเร็จเลยแม้แต่ครั้งเดียว** สังเกตได้จาก service YAML ที่ container ยังเป็น:
+
+```yaml
+containers:
+- name: placeholder-1
+  image: gcr.io/cloudrun/placeholder
+```
+
+ถ้ายังเห็น `gcr.io/cloudrun/placeholder` แปลว่า image จริงยังไม่เคยถูก deploy — ปัญหาอยู่ที่ขั้น build ไม่ใช่ตัว bot
+
+### ขั้นแรก: อ่าน build log จริง
+
+```bash
+gcloud builds list --region=global --limit=5
+gcloud builds log BUILD_ID
+```
+
+หรือเปิดหน้าเว็บ: **Cloud Build -> History** แล้วกด build สีแดงล่าสุด
+
+### สาเหตุที่พบบ่อย
+
+| อาการใน log | สาเหตุ | วิธีแก้ |
+|---|---|---|
+| `requirements.txt not found` หรือ build จบเร็วผิดปกติ | Build context directory ใส่ `webull-main` | แก้ trigger ให้ context เป็น `/` (Cloud Build -> Triggers -> Edit) |
+| `ERROR: Could not find a version that satisfies the requirement numpy==1.26.4` หรือ numpy build จาก source แล้วพัง | Buildpacks เลือก Python 3.13 ซึ่ง numpy 1.26.4 ไม่รองรับ | pull code ล่าสุดที่มีไฟล์ `.python-version` (pin 3.12) แล้ว push ใหม่ให้ trigger รัน |
+| `unable to detect entrypoint` / `no web process` | ไม่ได้ใส่ Function target ตอนสร้าง trigger | pull code ล่าสุดที่มี `Procfile` หรือแก้ trigger ให้ Function target เป็น `rebalance_trigger` |
+| build เขียว แต่ revision ล้มด้วย `container failed to start / startup probe failed` | container ไม่ได้ listen ที่ port 8080 | เช็คว่า Function target คือ `rebalance_trigger` และมี `Procfile` ใน repo |
+| `Permission denied` ตอน deploy | Cloud Build service account ไม่มีสิทธิ์ deploy Cloud Run | ให้ role `roles/run.admin` + `roles/iam.serviceAccountUser` แก่ Cloud Build SA |
+
+หลังแก้แล้ว สั่ง build ใหม่ได้โดย push commit ใดก็ได้เข้า branch ที่ trigger จับ หรือกด **Run** ที่ Cloud Build -> Triggers
+
+### เช็ค env vars ที่ยังเป็น placeholder
+
+ถ้าเคยกด Create service จากหน้า console โดยยังไม่แก้ค่า จะเห็นค่าแบบนี้ค้างอยู่:
+
+```yaml
+- name: GCP_PROJECT_ID
+  value: YOUR_PROJECT_ID
+```
+
+`YOUR_PROJECT_ID` เป็นแค่ตัวอย่าง ต้องแทนด้วย Project ID จริงตามข้อ 7 ไม่งั้นถึง build ผ่าน bot ก็จะตอบ `ERROR` เพราะต่อ Firestore ไม่ได้:
+
+```bash
+gcloud run services update "$SERVICE_NAME" \
+  --region="$REGION" \
+  --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID}"
+```
+
+### คำเตือนเรื่อง credentials
+
+`WEBULL_APP_KEY` และ `WEBULL_APP_SECRET` ที่ใส่เป็น env var จะมองเห็นได้ในหน้า console และ service YAML ห้ามแชร์ YAML นี้ให้คนอื่น ถ้าเผลอแชร์ไปแล้วให้ rotate key ในหน้า Webull OpenAPI ทันที
+
+## 16. Checklist มือใหม่
 
 ก่อนจบ ให้เช็คทีละข้อ:
 
@@ -435,7 +487,8 @@ gcloud scheduler jobs resume shannon-demon-every-5m \
 - เลือก **Cloud Build** แล้ว
 - เลือก **GitHub** และ Authenticate แล้ว
 - เลือก repo `firstnattapon/webull` แล้ว
-- Build context คือ `webull-main` หรือ `/` ตาม repo จริง
+- Build context คือ `/` (ไฟล์อยู่ที่ root ของ repo)
+- เห็นไฟล์ `.python-version` และ `Procfile` ใน branch ที่ deploy
 - Function target คือ `rebalance_trigger`
 - Cloud Run service ชื่อ `shannon-demon-bot`
 - ใส่ env-vars ด้วย Cloud Shell ครบแล้ว
