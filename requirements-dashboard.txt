@@ -1,0 +1,4 @@
+# Local/Streamlit Cloud only — not used by the Cloud Run bot deploy.
+streamlit==1.42.0
+google-cloud-firestore==2.11.1
+pandas==2.2.3
