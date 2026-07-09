@@ -1,4 +1,4 @@
-# Quick Start 101: Cloud Shell + Auto Deploy จาก GitHub
+# Quick Start 101: Cloud Shell + Auto Deploy จาก GitHub 
 
 คู่มือนี้สำหรับมือใหม่ที่ต้องการ deploy บน Google Cloud โดยใช้ **Cloud Shell** ช่วยตั้งค่า แต่ **ไม่ใช้ GitHub Actions**
 
