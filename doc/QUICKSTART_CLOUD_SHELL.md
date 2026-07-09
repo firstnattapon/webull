@@ -1,87 +1,76 @@
-# Quick Start 101: Cloud Shell + Auto Deploy จาก GitHub 
+# 🚀 Quick Start 101: Deploy Shannon Demon Bot บน Google Cloud
 
-คู่มือนี้สำหรับมือใหม่ที่ต้องการ deploy บน Google Cloud โดยใช้ **Cloud Shell** ช่วยตั้งค่า แต่ **ไม่ใช้ GitHub Actions** 
+คู่มือมือใหม่ ทำตามทีละขั้นได้เลย ใช้เวลาประมาณ 30 นาที
 
-วิธี deploy หลักยังเป็น:
-
-```text
-Cloud Run -> Connect repository -> Cloud Build -> GitHub -> firstnattapon/webull
-```
-
-เมื่อ push code เข้า branch ที่เลือก Google Cloud จะ build และ deploy ให้อัตโนมัติ
-
-## สิ่งที่จะได้
-
-- Google Cloud project สำหรับ bot
-- Firestore สำหรับเก็บ state และ trade log
-- Cloud Run function ชื่อ `shannon-demon-bot`
-- Auto deploy จาก GitHub repo ผ่าน Cloud Build
-- Environment variables ใส่เองด้วย Cloud Shell
-- Cloud Scheduler ยิง bot ทุก 5 นาที
-
-Repo:
+## ภาพรวม: เรากำลังจะทำอะไร
 
 ```text
-https://github.com/firstnattapon/webull
+GitHub (repo นี้)  ──push──▶  Cloud Build (build อัตโนมัติ)  ──deploy──▶  Cloud Run (bot ทำงาน)
+                                                                              ▲
+Cloud Scheduler (ยิงทุก 5 นาที) ──────────────────────────────────────────────┘
+                                                                              │
+                                                            Firestore (เก็บ state + trade log)
 ```
 
-Function target:
+แปลง่าย ๆ:
+
+1. เชื่อม GitHub กับ Google Cloud **ครั้งเดียว**
+2. หลังจากนั้น push code เข้า `main` เมื่อไหร่ ระบบ build + deploy ให้เองอัตโนมัติ
+3. Cloud Scheduler ปลุก bot ทุก 5 นาที ให้เช็คว่าต้องเทรดหรือไม่
+4. bot เก็บ state และประวัติเทรดไว้ใน Firestore
+
+## สิ่งที่จะได้เมื่อทำจบ
+
+- ✅ Cloud Run service ชื่อ `shannon-demon-bot` ที่ auto deploy จาก GitHub
+- ✅ Firestore เก็บ state และ trade log
+- ✅ Cloud Scheduler ยิง bot ทุก 5 นาที
+- ✅ Health check endpoint ไว้ตรวจสุขภาพ bot
+
+## ไฟล์สำคัญใน repo (ห้ามลบ!)
+
+| ไฟล์ | หน้าที่ |
+|---|---|
+| `.python-version` | บอก Google ให้ใช้ **Python 3.13** (builder ปัจจุบันมีแค่ 3.13 ขึ้นไป — pin ต่ำกว่านี้ build จะพัง) |
+| `Procfile` | บอกวิธี start bot: `functions-framework --target=rebalance_trigger` |
+| `requirements.txt` | รายการ library ที่ต้องติดตั้ง (numpy ต้องเป็น 2.x เพื่อรองรับ Python 3.13) |
+| `main.py` | จุดเริ่มต้นของ bot มี function ชื่อ `rebalance_trigger` |
+
+---
+
+# ส่วนที่ 1: เตรียมของ
+
+ต้องมี 2 อย่าง:
+
+**1. Webull credentials 3 ค่า** (ขอจากหน้า Webull OpenAPI):
 
 ```text
-rebalance_trigger
+WEBULL_APP_KEY      = app key จริง
+WEBULL_APP_SECRET   = app secret จริง
+WEBULL_ACCOUNT_ID   = account id จริง
 ```
 
-## 0. ค่าที่ต้องเตรียม
+**2. Google account** ที่เปิด Billing ได้ (มีบัตรผูก)
 
-ต้องมี Webull credentials 3 ค่า:
+💡 มือใหม่ให้เริ่มโหมดทดสอบเสมอ: `WEBULL_ENV=uat` และ `WEBULL_PREVIEW_ORDERS=true` (preview order ก่อน ไม่ส่งจริง) — ค่าในคู่มือนี้ตั้งไว้แบบนี้อยู่แล้ว
 
-```text
-WEBULL_APP_KEY=app key จริง
-WEBULL_APP_SECRET=app secret จริง
-WEBULL_ACCOUNT_ID=account id จริง
-```
+---
 
-ในคู่มือนี้ใช้เฉพาะ 3 ตัวนี้สำหรับ Webull credentials
+# ส่วนที่ 2: ตั้งค่า Google Cloud (ทำครั้งเดียว)
 
-สำหรับมือใหม่ แนะนำเริ่มแบบทดสอบ:
+## ขั้นที่ 1: สร้าง project
 
-```text
-WEBULL_ENV=uat
-WEBULL_PREVIEW_ORDERS=true
-```
+เปิด https://console.cloud.google.com/ แล้ว:
 
-`WEBULL_PREVIEW_ORDERS=true` ช่วยให้ preview order ก่อนส่งจริง เหมาะกับช่วงเริ่มต้น
+1. กดตัวเลือก project ด้านบน → **New Project**
+2. ตั้งชื่อ เช่น `webull-bot-smr` → **Create**
+3. เลือก project ที่เพิ่งสร้าง
+4. เปิด **Billing** ให้ project นี้
 
-## 1. สร้าง Google Cloud project
+จด **Project ID** ไว้ (เช่น `webull-bot-smr-123456`) — ต้องใช้ตลอดทั้งคู่มือ
 
-เปิด Google Cloud Console:
+## ขั้นที่ 2: เปิด Cloud Shell
 
-```text
-https://console.cloud.google.com/
-```
-
-ทำตามนี้:
-
-1. กดตัวเลือก project ด้านบน
-2. กด **New Project**
-3. ตั้งชื่อ เช่น `webull-bot-smr`
-4. กด **Create**
-5. เลือก project ที่สร้างใหม่
-6. เปิด Billing ให้ project นี้
-
-จด **Project ID** ไว้ เช่น:
-
-```text
-webull-bot-smr-123456
-```
-
-จากนี้ในคำสั่ง Cloud Shell ให้แทน `YOUR_PROJECT_ID` ด้วย Project ID ของคุณ
-
-## 2. เปิด Cloud Shell และตั้ง project
-
-ใน Google Cloud Console กด **Activate Cloud Shell** ด้านบนขวา
-
-รัน:
+กดปุ่ม **Activate Cloud Shell** (ไอคอน `>_` มุมขวาบน) แล้ววางคำสั่งนี้ (แก้ `YOUR_PROJECT_ID` เป็นของจริงก่อน):
 
 ```bash
 export PROJECT_ID=YOUR_PROJECT_ID
@@ -92,11 +81,11 @@ gcloud config set project "$PROJECT_ID"
 gcloud config get-value project
 ```
 
-บรรทัดสุดท้ายควรแสดง Project ID ของคุณ
+บรรทัดสุดท้ายต้องแสดง Project ID ของคุณ ถ้าใช่ = ผ่าน
 
-## 3. เปิด API ที่ต้องใช้
+⚠️ ถ้าปิด Cloud Shell แล้วเปิดใหม่ ให้รัน `export` 3 บรรทัดบนนี้ใหม่ทุกครั้ง
 
-รันใน Cloud Shell:
+## ขั้นที่ 3: เปิด API ที่ต้องใช้
 
 ```bash
 gcloud services enable \
@@ -109,11 +98,9 @@ gcloud services enable \
   iamcredentials.googleapis.com
 ```
 
-รอจนคำสั่งจบ ถ้า Google แจ้งว่าบาง API เปิดอยู่แล้ว ถือว่าปกติ
+รอจนจบ ถ้าบอกว่าบางตัวเปิดอยู่แล้ว = ปกติ ไปต่อได้
 
-## 4. สร้าง Firestore
-
-รัน:
+## ขั้นที่ 4: สร้าง Firestore
 
 ```bash
 gcloud firestore databases create \
@@ -121,95 +108,67 @@ gcloud firestore databases create \
   --location="$REGION"
 ```
 
-ถ้าขึ้นว่ามี database แล้ว ให้ข้ามได้
+ถ้าขึ้นว่ามี database อยู่แล้ว = ข้ามได้
 
-โค้ดจะใช้ Firestore path นี้:
-
-```text
-shannon_demon_state / SHANNON_DEMON_DNA_SMR
-shannon_demon_trades / auto generated documents
-```
-
-ยังไม่ต้องสร้าง collection เอง โค้ดจะสร้างตอนเริ่มทำงาน
-
-## 5. Deploy จาก GitHub repo แบบ auto update
-
-ขั้นตอนนี้ทำในหน้าเว็บ Google Cloud Console ไม่ใช่ GitHub Actions
-
-ไปที่:
+ไม่ต้องสร้าง collection เอง — bot จะสร้างให้ตอนทำงานครั้งแรก:
 
 ```text
-Cloud Run -> Services
+shannon_demon_state / SHANNON_DEMON_DNA_SMR   ← state ปัจจุบัน
+shannon_demon_trades / (สร้างอัตโนมัติ)        ← ประวัติเทรด
 ```
 
-ทำตามนี้:
+---
 
-1. กด **Connect repository**
-2. เลือก **Cloud Build**
-3. เลือก **GitHub**
-4. กด **Authenticate** ถ้ายังไม่เคยเชื่อม GitHub
-5. เลือก repo:
+# ส่วนที่ 3: เชื่อม GitHub ให้ deploy อัตโนมัติ (ทำครั้งเดียว)
+
+ขั้นตอนนี้ทำใน**หน้าเว็บ** Google Cloud Console
+
+## ขั้นที่ 5: Connect repository
+
+ไปที่ **Cloud Run → Services** แล้วทำตามนี้:
+
+| ลำดับ | ตั้งค่า | ใส่ค่า |
+|---|---|---|
+| 1 | กด | **Connect repository** |
+| 2 | Provider | **Cloud Build** → **GitHub** (กด Authenticate ถ้ายังไม่เคยเชื่อม) |
+| 3 | Repository | `firstnattapon/webull` |
+| 4 | Branch | `^main$` |
+| 5 | Build type | **Buildpacks** |
+| 6 | Build context directory | `/` |
+| 7 | Function target | `rebalance_trigger` |
+
+⚠️ **Build context ต้องเป็น `/`** เพราะ `main.py` กับ `requirements.txt` อยู่ที่ root ของ repo — ถ้าใส่อย่างอื่น (เช่น `webull-main`) build จะหาไฟล์ไม่เจอและล้มทุกครั้ง
+
+## ขั้นที่ 6: ตั้งค่า service แล้วกด Create
 
 ```text
-firstnattapon/webull
+Service name:    shannon-demon-bot
+Region:          asia-southeast1
+Authentication:  Require authentication
 ```
 
-6. Branch: ใส่ branch ที่ต้องการ auto deploy เช่น:
+แท็บ environment variables **ยังไม่ต้องใส่** — เดี๋ยวใช้ Cloud Shell ใส่ในขั้นถัดไป
+
+กด **Create** แล้วรอ build ครั้งแรก (ประมาณ 2-5 นาที) ดูสถานะได้ที่:
 
 ```text
-^main$
+Cloud Build → History          ← build เขียวหรือแดง
+Cloud Run → shannon-demon-bot  ← service ขึ้น Active หรือยัง
 ```
 
-7. Build type: เลือก **Buildpacks**
-8. Build context directory: repo นี้วาง `main.py` และ `requirements.txt` ไว้ที่ root ดังนั้นให้ใช้:
+✅ สำเร็จเมื่อ: build เขียว และ service มีเครื่องหมายถูกสีเขียว (Active)
 
-```text
-/
-```
+❌ ถ้าแดง: ไปดู [ส่วนที่ 6: แก้ปัญหา](#ส่วนที่-6-แก้ปัญหา-build-ไม่ผ่าน) ด้านล่าง
 
-อย่าใส่ `webull-main` — โฟลเดอร์นั้นมีเฉพาะตอนโหลด zip จาก GitHub มาแตกเอง ถ้าใส่ผิด Cloud Build จะหา `requirements.txt` ไม่เจอและ build ล้มทุกครั้ง
+---
 
-9. Function target:
+# ส่วนที่ 4: ใส่ค่า config ให้ bot
 
-```text
-rebalance_trigger
-```
+## ขั้นที่ 7: ใส่ environment variables
 
-10. กด **Save**
+กลับมาที่ Cloud Shell รันทีละคำสั่ง
 
-Google Cloud จะสร้าง Cloud Build trigger ให้เอง ต่อไปเมื่อ push code เข้า branch ที่เลือก ระบบจะ auto deploy ให้
-
-## 6. ตั้งค่า Cloud Run service
-
-ในหน้า Create service ให้ตั้งค่า:
-
-```text
-Service name: shannon-demon-bot
-Region: asia-southeast1
-Runtime: Python 3.12
-Authentication: Require authentication
-```
-
-ถ้าไม่มี Python 3.12 ให้เลือก Python 3.11
-
-หมายเหตุ: repo นี้มีไฟล์ `.python-version` (pin Python 3.12) และ `Procfile` (สั่งรัน `functions-framework --target=rebalance_trigger`) อยู่แล้ว Buildpacks จะอ่านสองไฟล์นี้อัตโนมัติ จึงไม่ต้องกังวลว่า Buildpacks จะเลือก Python เวอร์ชันใหม่เกินไป (เช่น 3.13 ที่ `numpy==1.26.4` ติดตั้งไม่ได้) หรือหา entrypoint ไม่เจอ
-
-ตรงแท็บ environment variables ยังไม่ต้องใส่ก็ได้ เพราะขั้นต่อไปจะใช้ Cloud Shell ช่วยใส่ให้
-
-จากนั้นกด **Create** แล้วรอ build ครั้งแรกให้เสร็จ
-
-ดูสถานะได้ที่:
-
-```text
-Cloud Build -> History
-Cloud Run -> shannon-demon-bot -> Revisions
-```
-
-## 7. ใส่ environment variables ด้วย Cloud Shell
-
-หลังจาก service ถูกสร้างแล้ว ให้กลับมาที่ Cloud Shell
-
-ตั้งค่าหลักที่ไม่ใช่ Webull credential:
+**คำสั่งที่ 1** — ค่า strategy ทั้งหมด (copy ได้เลย ไม่ต้องแก้):
 
 ```bash
 gcloud run services update "$SERVICE_NAME" \
@@ -217,7 +176,7 @@ gcloud run services update "$SERVICE_NAME" \
   --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},STRATEGY_ID=SHANNON_DEMON_DNA,SYMBOL=SMR,FIX_C=1500,P0=9.00,DIFF=30,DNA_CODE=bypass:100,START_TIMESTAMP=0,FIRESTORE_STATE_COLLECTION=shannon_demon_state,FIRESTORE_TRADE_COLLECTION=shannon_demon_trades,FIRESTORE_STATE_DOCUMENT=SHANNON_DEMON_DNA_SMR,WEBULL_ENV=uat,WEBULL_API_VERSION=v2,WEBULL_REGION=th,WEBULL_SUPPORT_TRADING_SESSION=CORE,WEBULL_PREVIEW_ORDERS=true"
 ```
 
-จากนั้นใส่ Webull credentials โดยแทน `...` เป็นค่าจริง:
+**คำสั่งที่ 2** — Webull credentials (แก้ `...` เป็นค่าจริงก่อนรัน):
 
 ```bash
 gcloud run services update "$SERVICE_NAME" \
@@ -225,9 +184,7 @@ gcloud run services update "$SERVICE_NAME" \
   --update-env-vars="WEBULL_APP_KEY=...,WEBULL_APP_SECRET=...,WEBULL_ACCOUNT_ID=..."
 ```
 
-คำสั่งนี้จะสร้าง Cloud Run revision ใหม่ แต่ยังคง auto deploy จาก GitHub repo ตามข้อ 5 เหมือนเดิม
-
-ตรวจ env-vars ที่ตั้งไว้:
+ตรวจว่าใส่ครบ:
 
 ```bash
 gcloud run services describe "$SERVICE_NAME" \
@@ -235,9 +192,9 @@ gcloud run services describe "$SERVICE_NAME" \
   --format="yaml(spec.template.spec.containers[0].env)"
 ```
 
-## 8. ให้ Cloud Run ใช้ Firestore ได้
+⚠️ เช็คว่า `GCP_PROJECT_ID` เป็น Project ID **จริง** ไม่ใช่คำว่า `YOUR_PROJECT_ID` ค้างอยู่
 
-ดู service account ที่ Cloud Run ใช้:
+## ขั้นที่ 8: ให้สิทธิ์ bot ใช้ Firestore
 
 ```bash
 RUN_SA=$(gcloud run services describe "$SERVICE_NAME" \
@@ -249,71 +206,42 @@ if [ -z "$RUN_SA" ]; then
   RUN_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 fi
 
-echo "$RUN_SA"
-```
-
-ให้สิทธิ์อ่าน/เขียน Firestore:
-
-```bash
 gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:${RUN_SA}" \
   --role="roles/datastore.user"
 ```
 
-## 9. ทดสอบ health check
-
-หา URL ของ service:
+## ขั้นที่ 9: ทดสอบว่า bot สุขภาพดี
 
 ```bash
 URL=$(gcloud run services describe "$SERVICE_NAME" \
   --region="$REGION" \
   --format="value(status.url)")
 
-echo "$URL"
+curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" "$URL/health"
 ```
 
-เรียก health endpoint:
+✅ ต้องเห็น `"status":"HEALTHY"`
 
-```bash
-curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
-  "$URL/health"
-```
+❌ ถ้าเห็น `UNHEALTHY` ให้อ่านส่วน `checks` ในคำตอบ — มันจะบอกเลยว่า env var ตัวไหนขาดหรือผิด แก้ด้วยคำสั่งในขั้นที่ 7 แล้ว curl ใหม่
 
-ถ้าสำเร็จควรเห็น:
+---
 
-```text
-"status":"HEALTHY"
-```
+# ส่วนที่ 5: ตั้งเวลาให้ bot ทำงานเอง
 
-ถ้าเห็น `UNHEALTHY` ให้อ่านส่วน `checks` ในผลลัพธ์ โดยมากจะบอกว่า env var ตัวไหนขาดหรือค่าไหนผิด
-
-## 10. ตั้ง Cloud Scheduler
-
-สร้าง service account สำหรับ Scheduler:
+## ขั้นที่ 10: สร้าง Cloud Scheduler ยิงทุก 5 นาที
 
 ```bash
 gcloud iam service-accounts create scheduler-invoker \
   --display-name="Scheduler Invoker"
-```
 
-ตั้งตัวแปร:
-
-```bash
 SCHEDULER_SA="scheduler-invoker@${PROJECT_ID}.iam.gserviceaccount.com"
-```
 
-ให้ Scheduler เรียก Cloud Run ได้:
-
-```bash
 gcloud run services add-iam-policy-binding "$SERVICE_NAME" \
   --region="$REGION" \
   --member="serviceAccount:${SCHEDULER_SA}" \
   --role="roles/run.invoker"
-```
 
-สร้าง Scheduler job ยิงทุก 5 นาที:
-
-```bash
 gcloud scheduler jobs create http shannon-demon-every-5m \
   --location="$REGION" \
   --schedule="*/5 * * * *" \
@@ -324,144 +252,98 @@ gcloud scheduler jobs create http shannon-demon-every-5m \
   --oidc-token-audience="$URL"
 ```
 
-ถ้ามี job อยู่แล้ว ให้ใช้คำสั่ง update:
+## ขั้นที่ 11: ยิงทดสอบทันที
 
 ```bash
-gcloud scheduler jobs update http shannon-demon-every-5m \
-  --location="$REGION" \
-  --schedule="*/5 * * * *" \
-  --time-zone="Asia/Bangkok" \
-  --uri="$URL" \
-  --http-method=POST \
-  --oidc-service-account-email="$SCHEDULER_SA" \
-  --oidc-token-audience="$URL"
+gcloud scheduler jobs run shannon-demon-every-5m --location="$REGION"
+
+gcloud run services logs read "$SERVICE_NAME" --region="$REGION" --limit=50
 ```
 
-## 11. ยิงทดสอบทันที
+สถานะที่จะเจอใน logs:
 
-สั่ง Scheduler ให้ยิงทันที:
+| Status | ความหมาย | ต้องทำอะไร |
+|---|---|---|
+| `PASS_MARKET_CLOSED` | ตลาดสหรัฐปิดอยู่ | ปกติ ไม่ต้องทำอะไร |
+| `PASS_WAITING_TO_START` | ยังไม่ถึงเวลา `START_TIMESTAMP` | ปกติ |
+| `PASS_DNA_ZERO` | DNA รอบนี้เป็น 0 เลยข้าม | ปกติ |
+| `PASS_THRESHOLD` | ราคายังไม่ขยับพอ (อยู่ในช่วง `DIFF`) | ปกติ |
+| `OK` | ส่ง order แล้ว 🎉 | เช็คใน Webull |
+| `BROKER_ERROR` | Webull ตอบ error | เช็ค credentials / ดู log |
+| `ERROR` | config หรือระบบมีปัญหา | ดู log แล้วแก้ env var |
 
-```bash
-gcloud scheduler jobs run shannon-demon-every-5m \
-  --location="$REGION"
-```
+🎉 **จบแล้ว! bot ทำงานอัตโนมัติแล้ว** ที่เหลือด้านล่างคือการใช้งานประจำวันกับการแก้ปัญหา
 
-ดู logs:
+---
 
-```bash
-gcloud run services logs read "$SERVICE_NAME" \
-  --region="$REGION" \
-  --limit=50
-```
+# การใช้งานประจำวัน
 
-สถานะที่เจอบ่อย:
+**แก้ code** → push เข้า `main` → deploy เองอัตโนมัติ ไม่ต้องทำอะไรเพิ่ม
 
-| Status | ความหมาย |
-|---|---|
-| `PASS_WAITING_TO_START` | ยังไม่ถึง `START_TIMESTAMP` |
-| `PASS_MARKET_CLOSED` | ตลาดสหรัฐปิด |
-| `PASS_DNA_ZERO` | DNA รอบนี้เป็น 0 เลยข้าม |
-| `PASS_THRESHOLD` | ยังอยู่ในช่วง `DIFF` |
-| `OK` | ส่ง order แล้ว |
-| `BROKER_ERROR` | Webull ตอบ error |
-| `ERROR` | config หรือระบบมีปัญหา |
-
-## 12. ตรวจ Firestore
-
-ดู state document:
-
-```bash
-gcloud firestore documents describe \
-  "projects/${PROJECT_ID}/databases/(default)/documents/shannon_demon_state/SHANNON_DEMON_DNA_SMR"
-```
-
-ถ้ายังไม่เจอ document อาจเป็นเพราะ bot ยังไม่ผ่านขั้นที่ต้องเขียน Firestore เช่น ตลาดปิด หรือ health check ยังไม่เรียก flow เทรด
-
-ถ้าต้องการ reset step กลับ 0 ให้ลบ document นี้ในหน้า Firestore Console:
-
-```text
-Firestore -> Data -> shannon_demon_state -> SHANNON_DEMON_DNA_SMR -> Delete
-```
-
-## 13. แก้ค่า env-vars หลัง deploy
-
-แก้ด้วย Cloud Shell ได้ เช่นเปลี่ยน strategy:
+**แก้ค่า strategy** (ไม่ต้องแตะ code):
 
 ```bash
 gcloud run services update "$SERVICE_NAME" \
   --region="$REGION" \
-  --update-env-vars="SYMBOL=SMR,FIX_C=1500,P0=9.00,DIFF=30,DNA_CODE=bypass:100,WEBULL_ENV=uat,WEBULL_PREVIEW_ORDERS=true"
+  --update-env-vars="SYMBOL=SMR,FIX_C=1500,P0=9.00,DIFF=30"
 ```
 
-ถ้าแก้ Webull credentials:
+**หยุด bot ชั่วคราว / เปิดกลับ:**
+
+```bash
+gcloud scheduler jobs pause shannon-demon-every-5m --location="$REGION"
+gcloud scheduler jobs resume shannon-demon-every-5m --location="$REGION"
+```
+
+**ดู logs:**
+
+```bash
+gcloud run services logs read "$SERVICE_NAME" --region="$REGION" --limit=50
+```
+
+**ดู state / ประวัติเทรดใน Firestore:** เปิดหน้า Console → **Firestore → Data** → collection `shannon_demon_state` และ `shannon_demon_trades`
+
+**Reset step กลับ 0:** ลบ document `shannon_demon_state / SHANNON_DEMON_DNA_SMR` ในหน้า Firestore
+
+**เปลี่ยนจากทดสอบเป็นของจริง** (คิดให้ดีก่อน!):
 
 ```bash
 gcloud run services update "$SERVICE_NAME" \
   --region="$REGION" \
-  --update-env-vars="WEBULL_APP_KEY=...,WEBULL_APP_SECRET=...,WEBULL_ACCOUNT_ID=..."
+  --update-env-vars="WEBULL_ENV=prod,WEBULL_PREVIEW_ORDERS=false,WEBULL_APP_KEY=...,WEBULL_APP_SECRET=...,WEBULL_ACCOUNT_ID=..."
 ```
 
-ทุกครั้งที่ update env-vars Cloud Run จะสร้าง revision ใหม่ทันที
+---
 
-## 14. หยุด bot ชั่วคราว
+# ส่วนที่ 6: แก้ปัญหา build ไม่ผ่าน
 
-หยุด Scheduler:
+อาการ: service ขึ้น **"Building and deploying from repository (see logs)"** ค้าง ไม่ Active ซักที
 
-```bash
-gcloud scheduler jobs pause shannon-demon-every-5m \
-  --location="$REGION"
-```
+แปลว่า build ยังไม่เคยสำเร็จ — เช็คได้จาก service YAML ถ้า image ยังเป็น `gcr.io/cloudrun/placeholder` = ยังไม่มี image จริง
 
-เปิดกลับ:
-
-```bash
-gcloud scheduler jobs resume shannon-demon-every-5m \
-  --location="$REGION"
-```
-
-## 15. แก้ปัญหา: "Building and deploying from repository (see logs)" ค้าง ไม่ Active ซักที
-
-อาการนี้แปลว่า Cloud Build ที่ trigger จาก GitHub **build ไม่สำเร็จเลยแม้แต่ครั้งเดียว** สังเกตได้จาก service YAML ที่ container ยังเป็น:
-
-```yaml
-containers:
-- name: placeholder-1
-  image: gcr.io/cloudrun/placeholder
-```
-
-ถ้ายังเห็น `gcr.io/cloudrun/placeholder` แปลว่า image จริงยังไม่เคยถูก deploy — ปัญหาอยู่ที่ขั้น build ไม่ใช่ตัว bot
-
-### ขั้นแรก: อ่าน build log จริง
+**ขั้นแรกเสมอ: อ่าน build log**
 
 ```bash
 gcloud builds list --region=global --limit=5
 gcloud builds log BUILD_ID
 ```
 
-หรือเปิดหน้าเว็บ: **Cloud Build -> History** แล้วกด build สีแดงล่าสุด
+หรือหน้าเว็บ: **Cloud Build → History** → กด build สีแดงล่าสุด → อ่าน error บรรทัดท้าย ๆ
 
-### สาเหตุที่พบบ่อย
+**ตารางอาการที่เจอบ่อย** (จากเหตุการณ์จริงของ repo นี้):
 
-| อาการใน log | สาเหตุ | วิธีแก้ |
+| Error ใน log | สาเหตุ | วิธีแก้ |
 |---|---|---|
-| `requirements.txt not found` หรือ build จบเร็วผิดปกติ | Build context directory ใส่ `webull-main` | แก้ trigger ให้ context เป็น `/` (Cloud Build -> Triggers -> Edit) |
-| `ERROR: Could not find a version that satisfies the requirement numpy==1.26.4` หรือ numpy build จาก source แล้วพัง | Buildpacks เลือก Python 3.13 ซึ่ง numpy 1.26.4 ไม่รองรับ | pull code ล่าสุดที่มีไฟล์ `.python-version` (pin 3.12) แล้ว push ใหม่ให้ trigger รัน |
-| `unable to detect entrypoint` / `no web process` | ไม่ได้ใส่ Function target ตอนสร้าง trigger | pull code ล่าสุดที่มี `Procfile` หรือแก้ trigger ให้ Function target เป็น `rebalance_trigger` |
-| build เขียว แต่ revision ล้มด้วย `container failed to start / startup probe failed` | container ไม่ได้ listen ที่ port 8080 | เช็คว่า Function target คือ `rebalance_trigger` และมี `Procfile` ใน repo |
-| `Permission denied` ตอน deploy | Cloud Build service account ไม่มีสิทธิ์ deploy Cloud Run | ให้ role `roles/run.admin` + `roles/iam.serviceAccountUser` แก่ Cloud Build SA |
+| `invalid Python version specified: failed to resolve version matching: 3.12 against [3.14.x ... 3.13.0]` | `.python-version` pin เวอร์ชันที่ builder ไม่มีแล้ว (มีแค่ 3.13+) | แก้ `.python-version` เป็น `3.13` |
+| `Could not find a version that satisfies the requirement numpy==1.26.x` | numpy 1.26 ไม่รองรับ Python 3.13 | ใช้ `numpy==2.3.1` ใน `requirements.txt` |
+| `requirements.txt not found` | Build context directory ผิด | แก้ trigger ให้ context เป็น `/` (Cloud Build → Triggers → Edit) |
+| `unable to detect entrypoint` / `no web process` | ไม่ได้ใส่ Function target และไม่มี `Procfile` | เช็คว่า `Procfile` ยังอยู่ใน repo หรือแก้ trigger ให้ Function target = `rebalance_trigger` |
+| build เขียวแต่ revision ล้ม `startup probe failed` | container ไม่ listen port 8080 | เช็ค `Procfile` และ Function target ตามข้อบน |
+| `Permission denied` ตอน deploy | Cloud Build ไม่มีสิทธิ์ deploy | ให้ role `roles/run.admin` + `roles/iam.serviceAccountUser` แก่ Cloud Build service account |
 
-หลังแก้แล้ว สั่ง build ใหม่ได้โดย push commit ใดก็ได้เข้า branch ที่ trigger จับ หรือกด **Run** ที่ Cloud Build -> Triggers
+หลังแก้แล้ว: push commit อะไรก็ได้เข้า `main` หรือกด **Run** ที่ Cloud Build → Triggers เพื่อ build ใหม่
 
-### เช็ค env vars ที่ยังเป็น placeholder
-
-ถ้าเคยกด Create service จากหน้า console โดยยังไม่แก้ค่า จะเห็นค่าแบบนี้ค้างอยู่:
-
-```yaml
-- name: GCP_PROJECT_ID
-  value: YOUR_PROJECT_ID
-```
-
-`YOUR_PROJECT_ID` เป็นแค่ตัวอย่าง ต้องแทนด้วย Project ID จริงตามข้อ 7 ไม่งั้นถึง build ผ่าน bot ก็จะตอบ `ERROR` เพราะต่อ Firestore ไม่ได้:
+**bot deploy ผ่านแล้วแต่ตอบ `ERROR`:** ส่วนใหญ่คือ `GCP_PROJECT_ID` ยังเป็นค่า placeholder — แก้ด้วย:
 
 ```bash
 gcloud run services update "$SERVICE_NAME" \
@@ -469,44 +351,26 @@ gcloud run services update "$SERVICE_NAME" \
   --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID}"
 ```
 
-### คำเตือนเรื่อง credentials
+---
 
-`WEBULL_APP_KEY` และ `WEBULL_APP_SECRET` ที่ใส่เป็น env var จะมองเห็นได้ในหน้า console และ service YAML ห้ามแชร์ YAML นี้ให้คนอื่น ถ้าเผลอแชร์ไปแล้วให้ rotate key ในหน้า Webull OpenAPI ทันที
+# Checklist สรุป
 
-## 16. Checklist มือใหม่
+ไล่เช็คทีละข้อ:
 
-ก่อนจบ ให้เช็คทีละข้อ:
+- [ ] สร้าง project + เปิด Billing แล้ว
+- [ ] เปิด API ครบ 7 ตัวแล้ว (ขั้นที่ 3)
+- [ ] สร้าง Firestore `(default)` แล้ว
+- [ ] Connect repository: repo `firstnattapon/webull`, branch `^main$`, Buildpacks, context `/`, target `rebalance_trigger`
+- [ ] Cloud Build เขียว + service `shannon-demon-bot` ขึ้น Active
+- [ ] ใส่ env vars ครบ (ขั้นที่ 7) และ `GCP_PROJECT_ID` เป็นค่าจริง
+- [ ] Cloud Run service account มี `roles/datastore.user`
+- [ ] `curl $URL/health` ได้ `HEALTHY`
+- [ ] Scheduler สร้างแล้ว + สั่ง run แล้วเห็น logs
 
-- สร้าง project แล้ว
-- เปิด Billing แล้ว
-- เปิด Cloud Shell แล้ว
-- ตั้ง `PROJECT_ID`, `REGION`, `SERVICE_NAME` แล้ว
-- เปิด API ครบแล้ว
-- สร้าง Firestore `(default)` แล้ว
-- Cloud Run กด **Connect repository** แล้ว
-- เลือก **Cloud Build** แล้ว
-- เลือก **GitHub** และ Authenticate แล้ว
-- เลือก repo `firstnattapon/webull` แล้ว
-- Build context คือ `/` (ไฟล์อยู่ที่ root ของ repo)
-- เห็นไฟล์ `.python-version` และ `Procfile` ใน branch ที่ deploy
-- Function target คือ `rebalance_trigger`
-- Cloud Run service ชื่อ `shannon-demon-bot`
-- ใส่ env-vars ด้วย Cloud Shell ครบแล้ว
-- ใช้ `WEBULL_APP_KEY`, `WEBULL_APP_SECRET`, `WEBULL_ACCOUNT_ID`
-- Cloud Run service account มี `roles/datastore.user`
-- Scheduler service account มี `roles/run.invoker`
-- Scheduler ใช้ OIDC token แล้ว
-- `curl "$URL/health"` ได้ `HEALTHY`
-- สั่ง Scheduler run แล้วเห็น logs
+---
 
-หลังจากนี้ workflow คือ:
+# ⚠️ ความปลอดภัย
 
-```text
-แก้ code -> push เข้า GitHub branch ที่เลือก -> Cloud Build auto deploy -> Cloud Run ได้ revision ใหม่
-```
-
-ถ้าแค่เปลี่ยนค่า strategy หรือ Webull credential:
-
-```text
-ใช้ gcloud run services update --update-env-vars
-```
+- `WEBULL_APP_KEY` / `WEBULL_APP_SECRET` ที่ใส่เป็น env var **มองเห็นได้**ในหน้า Console และ service YAML — **ห้ามแชร์ screenshot หรือ YAML ของ service ให้ใคร**
+- ถ้าเผลอแชร์ key ไปแล้ว ให้ rotate key ใหม่ในหน้า Webull OpenAPI ทันที แล้วอัปเดต env var
+- เริ่มด้วย `WEBULL_ENV=uat` + `WEBULL_PREVIEW_ORDERS=true` เสมอ จนกว่าจะมั่นใจว่า bot ทำงานถูกต้อง
