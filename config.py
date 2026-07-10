@@ -279,11 +279,13 @@ def load_broker_config(
 
 def _build_broker_config(project_id: str | None = None) -> BrokerConfig:
     webull_env = os.environ.get("WEBULL_ENV", "uat").strip().lower()
-    # Default to the v2 order API: for US stocks it hardcodes the required
-    # `category` header to "US_STOCK" (per the Webull docs / thai-lab). The v3
-    # order API would instead derive "US_EQUITY" from the body, which Webull
-    # rejects. Overridable via WEBULL_API_VERSION for non-stock use cases.
-    api_version = os.environ.get("WEBULL_API_VERSION", "v2").strip().lower()
+    # Default to the v3 order API. Per the SDK docstrings the v2 order
+    # endpoints are supported only for Webull HK/US, while v3 explicitly
+    # supports Webull TH (this deployment's region). v3 derives the
+    # `category` header ("US_EQUITY") from the order body, which the TH
+    # endpoint accepts — verified working against th-api UAT by the
+    # Manual Test Lab dashboard. Overridable via WEBULL_API_VERSION.
+    api_version = os.environ.get("WEBULL_API_VERSION", "v3").strip().lower()
     if api_version not in {"v2", "v3"}:
         raise ValueError("WEBULL_API_VERSION must be v2 or v3")
 
@@ -351,7 +353,7 @@ def validate_startup() -> dict[str, str]:
     except Exception as exc:
         checks["webull_endpoint"] = f"error: {exc}"
 
-    api_version = os.environ.get("WEBULL_API_VERSION", "v2").strip().lower()
+    api_version = os.environ.get("WEBULL_API_VERSION", "v3").strip().lower()
     checks["webull_api_version"] = (
         "ok" if api_version in {"v2", "v3"}
         else "error: WEBULL_API_VERSION must be v2 or v3"
