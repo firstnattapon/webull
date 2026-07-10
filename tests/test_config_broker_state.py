@@ -152,6 +152,67 @@ def test_retry_retries_5xx_but_not_4xx():
     assert transient_calls == 2
 
 
+REPEAT_REQUEST_BODY = (
+    "HTTP Status: 417, Code: OPENAPI_REPEAT_REQUEST, "
+    "Msg: Please don't tap repeatedly., RequestID: abc"
+)
+
+
+@pytest.mark.parametrize(
+    ("status_code", "body", "expected"),
+    [
+        (504, "gateway timeout", True),        # 5xx upstream failure
+        (500, "", True),
+        (417, REPEAT_REQUEST_BODY, True),      # Webull repeat-request throttle
+        (417, "some other 417 reason", False),  # unrelated 417 = permanent
+        (429, "too many requests", False),      # other 4xx = permanent
+        (400, "bad request", False),
+    ],
+)
+def test_is_retryable_http_classifies_status_and_repeat_throttle(status_code, body, expected):
+    assert broker._is_retryable_http(broker.BrokerHTTPError(status_code, body)) is expected
+
+
+def test_retry_recovers_from_repeat_request_throttle():
+    """A 417 OPENAPI_REPEAT_REQUEST on a read is backed off and retried."""
+    calls = 0
+
+    def throttled():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise broker.BrokerHTTPError(417, REPEAT_REQUEST_BODY)
+        return "ok"
+
+    with patch("broker.time.sleep"):
+        assert broker._retry()(throttled)() == "ok"
+    assert calls == 2
+
+
+def test_place_market_order_is_submitted_once_and_never_resubmitted(fake_sdk_exceptions):
+    """Order placement must not retry: a resubmit trips 417 / risks a dup fill."""
+    instance = broker.WebullBroker.__new__(broker.WebullBroker)
+    instance.account_id = "acct"
+    instance.config = SimpleNamespace(
+        preview_orders=False,
+        api_version="v3",
+        support_trading_session="CORE",
+    )
+    # A 504 on the submit is ambiguous — the order may already have landed.
+    place = Mock(return_value=SimpleNamespace(status_code=504, text="gateway timeout"))
+    instance.trade_client = SimpleNamespace(
+        order_v3=SimpleNamespace(place_order=place)
+    )
+
+    with patch("broker.time.sleep") as sleep:
+        with pytest.raises(broker.BrokerHTTPError) as excinfo:
+            instance.place_market_order("SMR", "BUY", 1.0, "coid")
+
+    assert excinfo.value.status_code == 504
+    assert place.call_count == 1   # submitted exactly once
+    sleep.assert_not_called()      # no retry/backoff on the order path
+
+
 @pytest.fixture
 def fake_sdk_exceptions(monkeypatch):
     """Install a stub ``webull.core.exception.exceptions`` module.
