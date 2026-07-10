@@ -158,6 +158,30 @@ def _response_json_or_raise(response: Any) -> Any:
     return response.json()
 
 
+def _call_sdk(fn, /, *args, **kwargs):
+    """Invoke a Webull SDK method, translating SDK exceptions to broker errors.
+
+    The SDK never returns a non-2xx response object — ``client.get_response``
+    raises ``ServerException`` (any upstream HTTP error, e.g. 504
+    GATEWAY_TIMEOUT) or ``ClientException`` (network-level failure) instead.
+    Without this translation those exceptions bypass ``_retry`` (which only
+    understands broker exceptions) and surface as generic 500s in the handler
+    instead of retryable ``BROKER_ERROR`` 502s.
+    """
+    from webull.core.exception.exceptions import ClientException, ServerException
+
+    try:
+        return fn(*args, **kwargs)
+    except ServerException as exc:
+        try:
+            status_code = int(exc.http_status)
+        except (TypeError, ValueError):
+            status_code = 502  # unknown upstream failure — treat as retryable
+        raise BrokerHTTPError(status_code, str(exc)) from exc
+    except ClientException as exc:
+        raise BrokerConnectionError(str(exc)) from exc
+
+
 def _format_order_quantity(quantity: float) -> str:
     """Round and format *quantity* for Webull order payload."""
     order_quantity = float(quantity)
@@ -201,8 +225,11 @@ def _retry(max_attempts: int = 3, base_delay: float = 0.5):
                             delay, exc.status_code,
                         )
                         time.sleep(delay)
-                except (ConnectionError, TimeoutError, OSError) as exc:
-                    last_exc = BrokerConnectionError(str(exc))
+                except (BrokerConnectionError, ConnectionError, TimeoutError, OSError) as exc:
+                    last_exc = (
+                        exc if isinstance(exc, BrokerConnectionError)
+                        else BrokerConnectionError(str(exc))
+                    )
                     if attempt < max_attempts - 1:
                         delay = base_delay * (2 ** attempt)
                         _record_metric("retries")
@@ -364,7 +391,7 @@ class WebullBroker:
         preview_response = None
         if self.config.preview_orders:
             preview_response = _response_json_or_raise(
-                order_api.preview_order(self.account_id, order_payload)
+                _call_sdk(order_api.preview_order, self.account_id, order_payload)
             )
 
         logger.info(
@@ -372,7 +399,7 @@ class WebullBroker:
             side, quantity, symbol, client_order_id,
         )
         response = _response_json_or_raise(
-            order_api.place_order(self.account_id, order_payload)
+            _call_sdk(order_api.place_order, self.account_id, order_payload)
         )
         _record_metric("orders_placed")
 
@@ -392,14 +419,18 @@ class WebullBroker:
     def _fetch_quantity(self, symbol: str) -> float:
         """Fetch position quantity for *symbol*."""
         positions_response = _response_json_or_raise(
-            self.trade_client.account_v2.get_account_position(self.account_id)
+            _call_sdk(
+                self.trade_client.account_v2.get_account_position,
+                self.account_id,
+            )
         )
         return self._extract_quantity(positions_response, symbol)
 
     def _fetch_last_price(self, symbol: str) -> float:
         """Fetch last traded price for *symbol*."""
         quote_response = _response_json_or_raise(
-            self.data_client.market_data.get_snapshot(
+            _call_sdk(
+                self.data_client.market_data.get_snapshot,
                 symbol,
                 US_STOCK_CATEGORY,
                 extend_hour_required=False,
