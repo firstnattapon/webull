@@ -181,6 +181,81 @@ def _decision_payload(decision: RebalanceDecision) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Signal execution
+# ---------------------------------------------------------------------------
+
+def _execute_signal(config: AppConfig, reserved: StepReservation):
+    """Execute one reserved DNA signal and preserve the public response shape."""
+    dna_step = reserved.dna_step
+    current_signal = reserved.dna_signal
+
+    if current_signal == 0:
+        return _ok(
+            "PASS_DNA_ZERO",
+            dna_step=dna_step,
+            dna_signal=current_signal,
+        )
+
+    broker_config = load_broker_config(config.project_id)
+    broker = get_broker(broker_config)
+    market_state = broker.get_position_and_price(config.symbol)
+
+    decision = calculate_shannon_decision(
+        quantity=market_state.quantity,
+        last_price=market_state.last_price,
+        fix_c=config.fix_c,
+        p0=config.p0,
+        diff=config.diff,
+    )
+    decision_data = _decision_payload(decision)
+
+    if decision.action == "PASS":
+        _log_trade(config, {
+            **reserved.to_dict(),
+            "status": "PASS_THRESHOLD",
+            "market_state": market_state.to_dict(),
+            "decision": decision_data,
+            "baseline_pnl": decision.baseline_pnl,
+        })
+        return _ok(
+            "PASS_THRESHOLD",
+            dna_step=dna_step,
+            dna_signal=current_signal,
+            decision=decision_data,
+        )
+
+    client_order_id = generate_client_order_id(
+        config.strategy_id,
+        config.symbol,
+        dna_step,
+    )
+    order_result = broker.place_market_order(
+        symbol=config.symbol,
+        side=decision.side or decision.action,
+        quantity=decision.order_quantity,
+        client_order_id=client_order_id,
+    )
+
+    _log_trade(config, {
+        **reserved.to_dict(),
+        "status": "ORDER_SUBMITTED",
+        "client_order_id": client_order_id,
+        "market_state": market_state.to_dict(),
+        "decision": decision_data,
+        "order_result": order_result.to_dict(),
+        "baseline_pnl": decision.baseline_pnl,
+    })
+
+    return _ok(
+        "OK",
+        dna_step=dna_step,
+        dna_signal=current_signal,
+        decision=decision_data,
+        order=order_result.to_dict(),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -236,74 +311,10 @@ def rebalance_trigger(request):
 
         reserved = reservation
 
-        # -- Gate 4: DNA signal (array lookup) ------------------------------
-        current_signal = reserved.dna_signal
-        if current_signal == 0:
-            return _ok(
-                "PASS_DNA_ZERO",
-                dna_step=dna_step,
-                dna_signal=current_signal,
-            )
+        return _execute_signal(config, reserved)
 
-        # -- Gate 5: broker trade (Webull API — most expensive) -------------
-        broker_config = load_broker_config(config.project_id)
-        broker = get_broker(broker_config)
-        market_state = broker.get_position_and_price(config.symbol)
 
-        decision = calculate_shannon_decision(
-            quantity=market_state.quantity,
-            last_price=market_state.last_price,
-            fix_c=config.fix_c,
-            p0=config.p0,
-            diff=config.diff,
-        )
-        decision_data = _decision_payload(decision)
 
-        if decision.action == "PASS":
-            _log_trade(config, {
-                **reserved.to_dict(),
-                "status": "PASS_THRESHOLD",
-                "market_state": market_state.to_dict(),
-                "decision": decision_data,
-                "baseline_pnl": decision.baseline_pnl,
-            })
-            return _ok(
-                "PASS_THRESHOLD",
-                dna_step=dna_step,
-                dna_signal=current_signal,
-                decision=decision_data,
-            )
-
-        # -- Execute order --------------------------------------------------
-        client_order_id = generate_client_order_id(
-            config.strategy_id,
-            config.symbol,
-            dna_step,
-        )
-        order_result = broker.place_market_order(
-            symbol=config.symbol,
-            side=decision.side or decision.action,
-            quantity=decision.order_quantity,
-            client_order_id=client_order_id,
-        )
-
-        _log_trade(config, {
-            **reserved.to_dict(),
-            "status": "ORDER_SUBMITTED",
-            "client_order_id": client_order_id,
-            "market_state": market_state.to_dict(),
-            "decision": decision_data,
-            "order_result": order_result.to_dict(),
-            "baseline_pnl": decision.baseline_pnl,
-        })
-
-        return _ok(
-            "OK",
-            dna_step=dna_step,
-            dna_signal=current_signal,
-            decision=decision_data,
-            order=order_result.to_dict(),
-        )
 
     except BrokerError as exc:
         logger.exception("Broker error during rebalance")
