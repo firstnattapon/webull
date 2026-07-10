@@ -11,8 +11,6 @@ Additions over v2:
   - GET /health (or ?health=1) — config validation + metrics, no trading
   - per-status invocation metrics, exposed on the health endpoint
   - transactional step reservation (race-free across concurrent instances)
-  - failed executions release the reserved step, so a broker outage no
-    longer burns DNA signals — the next tick retries the same step
   - background trade logging with a bounded flush before every response,
     so log writes survive Cloud Run's post-response CPU throttling
   - numpy/dna_engine loaded lazily, off the early-exit path
@@ -34,7 +32,6 @@ from market_utils import is_us_market_open
 from state import (
     StepReservation,
     flush_trade_logs,
-    release_step,
     reserve_step,
     write_trade_log,
 )
@@ -321,26 +318,22 @@ def rebalance_trigger(request):
 
     except BrokerError as exc:
         logger.exception("Broker error during rebalance")
-        step_released = _try_release_step(config, reserved)
-        _try_log_error(config, reserved, exc, step_released)
+        _try_log_error(config, reserved, exc)
         return _error(
             "BROKER_ERROR",
             http_status=502,
             error_type=exc.__class__.__name__,
             message=str(exc),
-            step_released=step_released,
         )
 
     except Exception as exc:
         logger.exception("Rebalance trigger failed")
-        step_released = _try_release_step(config, reserved)
-        _try_log_error(config, reserved, exc, step_released)
+        _try_log_error(config, reserved, exc)
         return _error(
             "ERROR",
             http_status=500,
             error_type=exc.__class__.__name__,
             message=str(exc),
-            step_released=step_released,
         )
 
     finally:
@@ -350,32 +343,10 @@ def rebalance_trigger(request):
         flush_trade_logs(timeout=3.0)
 
 
-def _try_release_step(
-    config: AppConfig | None,
-    reserved: StepReservation | None,
-) -> bool:
-    """Roll back a reserved-but-unexecuted step — never raises.
-
-    Without this, a broker failure permanently consumes the reserved DNA
-    step (the pointer already advanced) even though no trade happened.
-    ``release_step`` is itself best-effort and race-safe: it only moves the
-    pointer back while no other invocation has reserved past it.
-    """
-    if config is None or reserved is None:
-        return False
-    return release_step(
-        project_id=config.project_id,
-        collection=config.firestore_state_collection,
-        document=config.firestore_state_document,
-        reserved_step=reserved.dna_step,
-    )
-
-
 def _try_log_error(
     config: AppConfig | None,
     reserved: StepReservation | None,
     exc: Exception,
-    step_released: bool = False,
 ) -> None:
     """Best-effort error logging — never raises."""
     if config is None or reserved is None:
@@ -386,7 +357,6 @@ def _try_log_error(
             "status": "ERROR",
             "error_type": exc.__class__.__name__,
             "error_message": str(exc)[:1000],
-            "step_released": step_released,
         })
     except Exception:
         logger.exception("Failed to write error log")

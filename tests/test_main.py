@@ -41,7 +41,6 @@ def invoke(app, **patches):
         "is_us_market_open": Mock(return_value=True),
         "_get_dna_array": Mock(return_value=np.array([1, 0, 1], dtype=np.int8)),
         "reserve_step": Mock(return_value=StepReservation(0, 1)),
-        "release_step": Mock(return_value=False),
         "flush_trade_logs": Mock(),
     }
     defaults.update(patches)
@@ -165,35 +164,7 @@ def test_broker_error_response_shape_is_preserved(app, app_config):
         "status": "BROKER_ERROR",
         "error_type": "BrokerHTTPError",
         "message": "Webull HTTP 503: down",
-        "step_released": False,
     }
-
-
-def test_broker_error_releases_reserved_step(app, app_config):
-    broker_instance = Mock()
-    broker_instance.get_position_and_price.side_effect = BrokerHTTPError(504, "gw")
-    release = Mock(return_value=True)
-    log_trade = Mock()
-
-    body, code, _ = invoke(
-        app,
-        load_app_config=Mock(return_value=app_config),
-        load_broker_config=Mock(return_value=SimpleNamespace()),
-        get_broker=Mock(return_value=broker_instance),
-        release_step=release,
-        _log_trade=log_trade,
-    )
-
-    assert code == 502
-    assert body["step_released"] is True
-    release.assert_called_once_with(
-        project_id="project",
-        collection="state",
-        document="strategy_SMR",
-        reserved_step=0,
-    )
-    # The error log records that the step was returned to the timeline.
-    assert log_trade.call_args.args[1]["step_released"] is True
 
 
 def test_unexpected_error_response_shape_is_preserved(app):
@@ -207,7 +178,6 @@ def test_unexpected_error_response_shape_is_preserved(app):
         "status": "ERROR",
         "error_type": "ValueError",
         "message": "bad config",
-        "step_released": False,
     }, 500)
 
 
