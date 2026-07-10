@@ -134,6 +134,13 @@ def reserve_step(
     (``dna_step >= dna_length``) nothing is written and the returned
     reservation carries signal 0 — the caller detects timeline end by
     comparing ``dna_step`` against the DNA length.
+
+    Intentional: a reservation is never rolled back, even when the trade
+    that follows fails. Each DNA index is trained against a specific
+    scheduler time slot, so the pointer must advance exactly once per tick
+    — replaying a failed step at a later tick would shift every remaining
+    signal off its trained slot. A failed execution therefore skips its
+    signal by design (logged as status ERROR in the trade log).
     """
     try:
         db, firestore_module = _get_firestore(project_id)

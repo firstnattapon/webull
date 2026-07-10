@@ -316,6 +316,10 @@ def rebalance_trigger(request):
 
 
 
+    # Failure semantics: the reserved DNA step is intentionally NOT rolled
+    # back here. DNA indices are trained per scheduler time slot, so the
+    # pointer must advance exactly once per tick; a failed execution skips
+    # its signal rather than replaying it out of its slot (see reserve_step).
     except BrokerError as exc:
         logger.exception("Broker error during rebalance")
         _try_log_error(config, reserved, exc)
