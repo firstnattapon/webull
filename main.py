@@ -224,6 +224,24 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
             decision=decision_data,
         )
 
+    # Account / Orders guard: position snapshots can lag an accepted order.
+    # Do not stack another rebalance while Webull still reports an open order
+    # for this symbol; the next DNA tick will recalculate from a fresh position.
+    if broker.has_open_order(config.symbol):
+        _log_trade(config, {
+            **reserved.to_dict(),
+            "status": "PASS_OPEN_ORDER",
+            "market_state": market_state.to_dict(),
+            "decision": decision_data,
+            "baseline_pnl": decision.baseline_pnl,
+        })
+        return _ok(
+            "PASS_OPEN_ORDER",
+            dna_step=dna_step,
+            dna_signal=current_signal,
+            decision=decision_data,
+        )
+
     client_order_id = generate_client_order_id(
         config.strategy_id,
         config.symbol,

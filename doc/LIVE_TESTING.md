@@ -74,6 +74,8 @@ th-api.uat.webullbroker.com
 | `401` / `403` | App Key, App Secret, Account ID หรือสิทธิ์ไม่ตรง environment |
 | `UNHEALTHY` | อ่านรายการ `checks` ในผล `/health` |
 | `PASS_MARKET_CLOSED` | ตลาดสหรัฐปิด เป็นสถานะปกติ |
+| `PASS_OPEN_ORDER` | Webull ยังมี order ของ symbol นี้ค้างอยู่ ระบบจึงไม่ส่งซ้ำ |
+| quantity เป็น `0` ทั้งที่มี position | เปิด Manual Test Lab ตรวจ raw Account Positions; ระบบจะหยุดด้วย 502 หากพบ symbol แต่ไม่มี field quantity แทนการเดาเป็น 0 |
 | `Regional Access Boundary ... Gaia id` | ปัญหาตัวตนของ Google Cloud Shell ไม่ใช่ Webull |
 
 ## ก่อนเปิด Production
@@ -83,4 +85,3 @@ th-api.uat.webullbroker.com
 - ใช้ Production App Key, App Secret และ Account ID เท่านั้น
 - Endpoint ต้องเป็น `api.webull.co.th`
 - ตรวจจำนวนเงิน, symbol, DNA, `FIX_C`, `P0`, `DIFF` และ Scheduler อีกครั้ง
-

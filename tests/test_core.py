@@ -106,6 +106,21 @@ def test_shannon_threshold_is_inclusive_and_output_aliases_are_preserved():
     assert payload["baseline"] == payload["baseline_pnl"]
 
 
+def test_export_fix_c_example_uses_position_quantity_not_zero():
+    decision = calculate_shannon_decision(
+        quantity=10.0,
+        last_price=150.0,
+        fix_c=2000.0,
+        p0=100.0,
+        diff=60.0,
+    )
+
+    assert decision.value_now_usd == 1500.0
+    assert decision.rebalance_amount == 500.0
+    assert decision.action == "BUY"
+    assert decision.order_quantity == 3.33333
+
+
 @pytest.mark.parametrize(
     "overrides",
     [

@@ -120,6 +120,7 @@ def test_threshold_response_and_log_payload_are_preserved(app, app_config):
 def test_order_response_and_deterministic_client_id_are_preserved(app, app_config):
     broker_instance = Mock()
     broker_instance.get_position_and_price.return_value = MarketState(5.0, 100.0)
+    broker_instance.has_open_order.return_value = False
     broker_instance.place_market_order.return_value = OrderResult(
         client_order_id="id",
         order_id="order-1",
@@ -145,6 +146,27 @@ def test_order_response_and_deterministic_client_id_are_preserved(app, app_confi
     assert kwargs["side"] == "BUY"
     assert kwargs["quantity"] == 5.0
     assert len(kwargs["client_order_id"]) == 32
+
+
+def test_open_order_prevents_duplicate_rebalance_submission(app, app_config):
+    broker_instance = Mock()
+    broker_instance.get_position_and_price.return_value = MarketState(5.0, 100.0)
+    broker_instance.has_open_order.return_value = True
+    log_trade = Mock()
+
+    body, code, _ = invoke(
+        app,
+        load_app_config=Mock(return_value=app_config),
+        load_broker_config=Mock(return_value=SimpleNamespace()),
+        get_broker=Mock(return_value=broker_instance),
+        _log_trade=log_trade,
+    )
+
+    assert code == 200
+    assert body["status"] == "PASS_OPEN_ORDER"
+    assert body["decision"]["action"] == "BUY"
+    broker_instance.place_market_order.assert_not_called()
+    log_trade.assert_called_once()
 
 
 def test_broker_error_response_shape_is_preserved(app, app_config):
