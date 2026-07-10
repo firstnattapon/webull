@@ -107,6 +107,29 @@ def test_nested_webull_responses_are_parsed_without_changing_shape_assumptions()
     assert broker.WebullBroker._extract_quantity(response, "AAPL") == 0.0
 
 
+def test_regional_nested_position_response_preserves_symbol_quantity_pair():
+    response = {
+        "data": [{
+            "instrument": {"symbol": "SMR.US"},
+            "position": {"positionQuantity": "10"},
+        }]
+    }
+
+    assert broker.WebullBroker._extract_quantity(response, "SMR") == 10.0
+
+
+def test_matching_position_without_quantity_fails_closed_instead_of_buying_from_zero():
+    response = {"positions": [{"symbol": "SMR", "cost_price": "100"}]}
+
+    with pytest.raises(broker.BrokerValidationError, match="position quantity"):
+        broker.WebullBroker._extract_quantity(response, "SMR")
+
+
+def test_comma_formatted_position_quantity_is_supported():
+    response = [{"symbol": "SMR", "quantity": "1,234.5"}]
+    assert broker.WebullBroker._extract_quantity(response, "SMR") == 1234.5
+
+
 def test_broker_cache_reuses_same_config_and_rebuilds_for_changed_config():
     first_config = SimpleNamespace(name="first")
     second_config = SimpleNamespace(name="second")
@@ -189,6 +212,54 @@ def test_retry_recovers_from_repeat_request_throttle():
     assert calls == 2
 
 
+def test_failed_position_read_retries_only_position_not_successful_quote():
+    def response(status_code, payload=None, text=""):
+        return SimpleNamespace(
+            status_code=status_code,
+            text=text,
+            json=lambda: payload,
+        )
+
+    position = Mock(side_effect=[
+        response(504, text="gateway timeout"),
+        response(200, [{"symbol": "SMR", "quantity": "10"}]),
+    ])
+    snapshot = Mock(return_value=response(
+        200, {"symbol": "SMR", "last_price": "150"}
+    ))
+    instance = broker.WebullBroker.__new__(broker.WebullBroker)
+    instance.account_id = "account"
+    instance.trade_client = SimpleNamespace(
+        account_v2=SimpleNamespace(get_account_position=position),
+    )
+    instance.data_client = SimpleNamespace(
+        market_data=SimpleNamespace(get_snapshot=snapshot),
+    )
+
+    with patch("broker.time.sleep"):
+        result = instance.get_position_and_price("SMR")
+
+    assert result == broker.MarketState(quantity=10.0, last_price=150.0)
+    assert position.call_count == 2
+    assert snapshot.call_count == 1
+
+
+def test_open_order_guard_uses_dashboard_account_orders_api():
+    open_orders = Mock(return_value=SimpleNamespace(
+        status_code=200,
+        json=lambda: {"orders": [{"symbol": "SMR", "status": "SUBMITTED"}]},
+    ))
+    instance = broker.WebullBroker.__new__(broker.WebullBroker)
+    instance.account_id = "account"
+    instance.trade_client = SimpleNamespace(
+        order_v2=SimpleNamespace(get_order_open=open_orders),
+    )
+
+    assert instance.has_open_order("smr") is True
+    assert instance.has_open_order("AAPL") is False
+    open_orders.assert_called_with("account", page_size=100)
+
+
 def test_place_market_order_is_submitted_once_and_never_resubmitted(fake_sdk_exceptions):
     """Order placement must not retry: a resubmit trips 417 / risks a dup fill."""
     instance = broker.WebullBroker.__new__(broker.WebullBroker)
@@ -211,6 +282,28 @@ def test_place_market_order_is_submitted_once_and_never_resubmitted(fake_sdk_exc
     assert excinfo.value.status_code == 504
     assert place.call_count == 1   # submitted exactly once
     sleep.assert_not_called()      # no retry/backoff on the order path
+
+
+def test_order_with_id_defaults_to_submitted_instead_of_unknown():
+    instance = broker.WebullBroker.__new__(broker.WebullBroker)
+    instance.account_id = "acct"
+    instance.config = SimpleNamespace(
+        preview_orders=False,
+        api_version="v3",
+        support_trading_session="CORE",
+    )
+    place = Mock(return_value=SimpleNamespace(
+        status_code=200,
+        json=lambda: {"order_id": "order-1"},
+    ))
+    instance.trade_client = SimpleNamespace(
+        order_v3=SimpleNamespace(place_order=place),
+    )
+
+    result = instance.place_market_order("SMR", "BUY", 1.0, "coid")
+
+    assert result.order_id == "order-1"
+    assert result.status == "SUBMITTED"
 
 
 @pytest.fixture

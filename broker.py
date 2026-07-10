@@ -27,6 +27,20 @@ logger = logging.getLogger("shannon_demon_dna.broker")
 
 US_STOCK_CATEGORY = "US_STOCK"
 ORDER_QUANTITY_DECIMAL_PRECISION = 5
+OPEN_ORDER_PAGE_SIZE = 100
+
+SYMBOL_FIELDS = (
+    "symbol", "ticker", "instrument_symbol", "instrumentSymbol",
+)
+POSITION_QUANTITY_FIELDS = (
+    "quantity", "qty", "position_quantity", "positionQuantity",
+    "position_qty", "positionQty", "holding_quantity", "holdingQuantity",
+    "net_quantity", "netQuantity", "available_qty", "availableQty",
+)
+LAST_PRICE_FIELDS = (
+    "last_price", "lastPrice", "last", "price", "close",
+    "close_price", "closePrice", "pPrice",
+)
 
 # ---------------------------------------------------------------------------
 # Exceptions
@@ -147,6 +161,67 @@ def _find_first_value(value: Any, *names: str, default: Any = None) -> Any:
     return default
 
 
+def _normalize_symbol(value: Any) -> str:
+    """Normalize Webull symbols while preserving exact ticker boundaries."""
+    normalized = str(value or "").strip().upper()
+    for suffix in (".US", ":US"):
+        if normalized.endswith(suffix):
+            return normalized[:-len(suffix)]
+    return normalized
+
+
+def _coerce_number(value: Any, field_name: str) -> float:
+    """Convert a Webull numeric scalar, including comma-formatted strings."""
+    if isinstance(value, bool) or isinstance(value, (dict, list, tuple)):
+        raise BrokerValidationError(f"Webull returned an invalid {field_name}: {value!r}")
+    try:
+        number = float(str(value).strip().replace(",", ""))
+    except (TypeError, ValueError) as exc:
+        raise BrokerValidationError(
+            f"Webull returned an invalid {field_name}: {value!r}"
+        ) from exc
+    if not math.isfinite(number):
+        raise BrokerValidationError(
+            f"Webull returned a non-finite {field_name}: {value!r}"
+        )
+    return number
+
+
+def _extract_symbol_scoped_number(
+    response: Any,
+    symbol: str,
+    number_fields: tuple[str, ...],
+    field_name: str,
+) -> float | None:
+    """Read a number from the smallest nested record containing *symbol*.
+
+    Webull responses are usually flat, but some regional endpoints wrap the
+    instrument and position values in sibling objects. Walking deepest records
+    first keeps a symbol and its number in the same logical record and avoids
+    accidentally pairing values from two different positions.
+    """
+    target = _normalize_symbol(symbol)
+    matched_symbol = False
+    records = list(_iter_dicts(response))
+
+    for record in reversed(records):
+        record_symbol = _find_first_value(record, *SYMBOL_FIELDS, default=None)
+        if record_symbol in (None, "") or _normalize_symbol(record_symbol) != target:
+            continue
+
+        matched_symbol = True
+        raw_number = _find_first_value(record, *number_fields, default=None)
+        if raw_number in (None, ""):
+            continue
+        return _coerce_number(raw_number, field_name)
+
+    if matched_symbol:
+        raise BrokerValidationError(
+            f"Webull position/quote for {target} did not contain {field_name}"
+        )
+    return None
+
+
 def _response_json_or_raise(response: Any) -> Any:
     """Unwrap an SDK response — raise ``BrokerHTTPError`` on failure."""
     _record_metric("api_calls")
@@ -158,7 +233,12 @@ def _response_json_or_raise(response: Any) -> Any:
         text = getattr(response, "text", repr(response))
         raise BrokerHTTPError(status_code, text)
 
-    return response.json()
+    try:
+        return response.json()
+    except Exception as exc:
+        raise BrokerValidationError(
+            f"Webull HTTP {status_code} returned invalid JSON"
+        ) from exc
 
 
 def _call_sdk(fn, /, *args, **kwargs):
@@ -374,7 +454,6 @@ class WebullBroker:
 
     # ---- public API -------------------------------------------------------
 
-    @_retry()
     def get_position_and_price(self, symbol: str) -> MarketState:
         """Fetch current position quantity and last price for *symbol*.
 
@@ -392,9 +471,9 @@ class WebullBroker:
         quantity = float(future_qty.result())
         last_price = float(future_price.result())
 
-        if not math.isfinite(quantity):
+        if not math.isfinite(quantity) or quantity < 0:
             raise BrokerValidationError(
-                f"Webull returned a non-finite quantity for {normalized}"
+                f"Webull returned an invalid quantity for {normalized}: {quantity}"
             )
         if not math.isfinite(last_price) or last_price <= 0:
             raise BrokerValidationError(
@@ -402,6 +481,28 @@ class WebullBroker:
             )
 
         return MarketState(quantity=quantity, last_price=last_price)
+
+    @_retry()
+    def has_open_order(self, symbol: str) -> bool:
+        """Return whether Webull reports an active order for *symbol*.
+
+        The order-open endpoint is the same account/order read used by the
+        Manual Test Lab. This prevents another DNA tick from stacking a new
+        order while a previously accepted order has not filled yet.
+        """
+        normalized = _normalize_symbol(symbol)
+        response = _response_json_or_raise(
+            _call_sdk(
+                self.trade_client.order_v2.get_order_open,
+                self.account_id,
+                page_size=OPEN_ORDER_PAGE_SIZE,
+            )
+        )
+        return any(
+            _normalize_symbol(_get_value(item, *SYMBOL_FIELDS, default=""))
+            == normalized
+            for item in _iter_dicts(response)
+        )
 
     def place_market_order(
         self,
@@ -431,9 +532,7 @@ class WebullBroker:
 
         preview_response = None
         if self.config.preview_orders:
-            preview_response = _response_json_or_raise(
-                _call_sdk(order_api.preview_order, self.account_id, order_payload)
-            )
+            preview_response = self._preview_market_order(order_api, order_payload)
 
         logger.info(
             "Placing order: side=%s qty=%s symbol=%s coid=%s",
@@ -444,12 +543,13 @@ class WebullBroker:
         )
         _record_metric("orders_placed")
 
+        order_id = _find_first_value(response, "order_id", "orderId", "id")
         return OrderResult(
             client_order_id=client_order_id,
-            order_id=_find_first_value(response, "order_id", "orderId", "id"),
+            order_id=order_id,
             status=_find_first_value(
                 response, "status", "order_status", "orderStatus",
-                default="UNKNOWN",
+                default="SUBMITTED" if order_id else "UNKNOWN",
             ),
             preview=preview_response,
             raw_response=response,
@@ -457,6 +557,7 @@ class WebullBroker:
 
     # ---- private: data fetching -------------------------------------------
 
+    @_retry()
     def _fetch_quantity(self, symbol: str) -> float:
         """Fetch position quantity for *symbol*."""
         positions_response = _response_json_or_raise(
@@ -467,6 +568,7 @@ class WebullBroker:
         )
         return self._extract_quantity(positions_response, symbol)
 
+    @_retry()
     def _fetch_last_price(self, symbol: str) -> float:
         """Fetch last traded price for *symbol*."""
         quote_response = _response_json_or_raise(
@@ -479,6 +581,13 @@ class WebullBroker:
             )
         )
         return self._extract_last_price(quote_response, symbol)
+
+    @_retry()
+    def _preview_market_order(self, order_api: Any, order_payload: Any) -> Any:
+        """Preview is idempotent and can safely recover from 417/5xx errors."""
+        return _response_json_or_raise(
+            _call_sdk(order_api.preview_order, self.account_id, order_payload)
+        )
 
     # ---- private: order building ------------------------------------------
 
@@ -529,37 +638,36 @@ class WebullBroker:
 
     @staticmethod
     def _extract_quantity(response: Any, symbol: str) -> float:
-        for position in _iter_dicts(response):
-            position_symbol = _get_value(
-                position,
-                "symbol", "ticker", "instrument_symbol", "instrumentSymbol",
+        quantity = _extract_symbol_scoped_number(
+            response,
+            symbol,
+            POSITION_QUANTITY_FIELDS,
+            "position quantity",
+        )
+        if quantity is None:
+            return 0.0
+        if quantity < 0:
+            raise BrokerValidationError(
+                f"Webull returned a negative position quantity for {symbol}: {quantity}"
             )
-            if position_symbol is None or str(position_symbol).upper() != symbol:
-                continue
-
-            quantity = _get_value(
-                position,
-                "quantity", "qty", "position", "position_qty",
-                "positionQty", "available_qty", "availableQty",
-            )
-            if quantity not in (None, ""):
-                return float(quantity)
-
-        return 0.0
+        return quantity
 
     @staticmethod
     def _extract_last_price(response: Any, symbol: str) -> float:
-        for quote in _iter_dicts(response):
-            price = _get_value(
-                quote,
-                "last_price", "lastPrice", "last", "price",
-                "close", "close_price", "closePrice", "pPrice",
-            )
-            if price in (None, ""):
-                continue
+        price = _extract_symbol_scoped_number(
+            response,
+            symbol,
+            LAST_PRICE_FIELDS,
+            "last price",
+        )
+        if price is not None:
+            return price
 
-            quote_symbol = _get_value(quote, "symbol", "ticker", default=symbol)
-            if str(quote_symbol).upper() == symbol:
-                return float(price)
-
-        return 0.0
+        # Snapshot responses from some SDK versions omit the symbol because
+        # the request already identifies it. Accept only an unambiguous price.
+        prices: list[float] = []
+        for record in reversed(list(_iter_dicts(response))):
+            raw_price = _get_value(record, *LAST_PRICE_FIELDS, default=None)
+            if raw_price not in (None, ""):
+                prices.append(_coerce_number(raw_price, "last price"))
+        return prices[0] if len(prices) == 1 else 0.0
