@@ -1,7 +1,9 @@
 """Unified Webull broker — single source of truth for all API interactions.
 
 Single ``WebullBroker`` class with:
-  - retry (3x exponential backoff on HTTP 5xx / network errors)
+  - retry for idempotent reads only (3x jittered backoff on HTTP 5xx,
+    network errors, and Webull's 417 OPENAPI_REPEAT_REQUEST throttle);
+    order placement is submitted exactly once and never resubmitted
   - shared I/O thread pool (position + price fetched concurrently,
     pool reused across invocations instead of rebuilt per call)
   - connection caching (module-level singleton, thread-safe)
@@ -14,6 +16,7 @@ import atexit
 import functools
 import logging
 import math
+import random
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -198,11 +201,45 @@ def _format_order_quantity(quantity: float) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Retry decorator — exponential backoff
+# Retry decorator — jittered exponential backoff (idempotent reads only)
 # ---------------------------------------------------------------------------
 
-def _retry(max_attempts: int = 3, base_delay: float = 0.5):
-    """Decorator: retry on ``BrokerHTTPError`` with exponential backoff."""
+# Webull rejects requests it considers a duplicate of a recent / in-flight
+# one with HTTP 417 and this error code ("Please don't tap repeatedly.").
+# Each SDK request is signed with a fresh nonce, so this is server-side
+# idempotency keyed on request content, not a signing artefact.
+REPEAT_REQUEST_CODE = "OPENAPI_REPEAT_REQUEST"
+
+
+def _is_retryable_http(exc: BrokerHTTPError) -> bool:
+    """Whether an HTTP error is a transient condition worth retrying.
+
+    * 5xx — upstream server/gateway failure (e.g. 504 GATEWAY_TIMEOUT).
+    * 417 OPENAPI_REPEAT_REQUEST — Webull throttling a request that arrived
+      too close to an identical recent one. For an idempotent read this is a
+      timing artefact (often provoked by our own retry), so we back off and
+      try again rather than failing fast.
+
+    Every other 4xx is a permanent client error and must not be retried.
+    NOTE: only ever applied to reads — order placement is never retried,
+    because there a repeat request means the order already reached Webull.
+    """
+    if exc.status_code >= 500:
+        return True
+    return exc.status_code == 417 and REPEAT_REQUEST_CODE in (exc.body or "")
+
+
+def _retry(max_attempts: int = 3, base_delay: float = 1.0, max_jitter: float = 0.5):
+    """Decorator: retry an *idempotent* call with jittered exponential backoff.
+
+    Retries transient ``BrokerHTTPError`` (see ``_is_retryable_http``) and
+    network errors. Jitter spreads retries out so they do not re-arrive
+    inside Webull's repeat-request window and trip the 417 throttle — the
+    very failure a naive fixed backoff caused in production.
+    """
+
+    def _backoff(attempt: int) -> float:
+        return base_delay * (2 ** attempt) + random.uniform(0.0, max_jitter)
 
     def decorator(fn):
         @functools.wraps(fn)
@@ -213,11 +250,11 @@ def _retry(max_attempts: int = 3, base_delay: float = 0.5):
                     return fn(*args, **kwargs)
                 except BrokerHTTPError as exc:
                     last_exc = exc
-                    if exc.status_code < 500:
+                    if not _is_retryable_http(exc):
                         _record_metric("errors")
-                        raise  # 4xx = don't retry
+                        raise  # permanent 4xx = don't retry
                     if attempt < max_attempts - 1:
-                        delay = base_delay * (2 ** attempt)
+                        delay = _backoff(attempt)
                         _record_metric("retries")
                         logger.warning(
                             "Retry %d/%d for %s after %.1fs (HTTP %d)",
@@ -231,7 +268,7 @@ def _retry(max_attempts: int = 3, base_delay: float = 0.5):
                         else BrokerConnectionError(str(exc))
                     )
                     if attempt < max_attempts - 1:
-                        delay = base_delay * (2 ** attempt)
+                        delay = _backoff(attempt)
                         _record_metric("retries")
                         logger.warning(
                             "Retry %d/%d for %s after %.1fs (network)",
@@ -366,7 +403,6 @@ class WebullBroker:
 
         return MarketState(quantity=quantity, last_price=last_price)
 
-    @_retry()
     def place_market_order(
         self,
         symbol: str,
@@ -376,9 +412,14 @@ class WebullBroker:
     ) -> OrderResult:
         """Place a market order and return a structured ``OrderResult``.
 
-        Retrying a submit is safe because ``client_order_id`` is
-        deterministic per (strategy, symbol, step) — Webull deduplicates
-        resubmissions of the same client order id.
+        Submitted exactly once — deliberately NOT wrapped in ``_retry``.
+        Webull does not silently dedupe resubmissions of the same
+        ``client_order_id``: it rejects them with HTTP 417
+        OPENAPI_REPEAT_REQUEST ("Please don't tap repeatedly."), and a 5xx
+        timeout on a submit is ambiguous (the order may already have
+        landed). Resubmitting therefore risks either a hard 417 or a
+        duplicate fill, so a transient failure here skips this tick's trade
+        instead — consistent with the DNA step-per-time-slot model.
         """
         order_payload = self._build_market_order_payload(
             symbol=symbol.upper(),
