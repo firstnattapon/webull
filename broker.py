@@ -266,6 +266,13 @@ def get_broker(config) -> "WebullBroker":
     still hits the cache.
     """
     global _cached_broker
+
+    # Cache hits are the normal warm-start path. Only lock when the broker
+    # is absent or its configuration changed.
+    cached = _cached_broker
+    if cached is not None and cached.config == config:
+        return cached
+
     with _broker_lock:
         if _cached_broker is not None and _cached_broker.config == config:
             return _cached_broker
