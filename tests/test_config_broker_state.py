@@ -347,35 +347,3 @@ def test_reserve_step_does_not_write_after_timeline_end():
 def test_invalid_firestore_steps_are_rejected(value):
     with pytest.raises(state.StepReadError):
         state._parse_step(value)
-
-
-def test_release_step_rolls_back_failed_reservation():
-    # Step 2 was reserved (pointer moved to 3) but execution failed.
-    document = FakeDocument(FakeSnapshot({"dna_step": 3}))
-    db = FakeDb(document)
-
-    with patch("state._get_firestore", return_value=(db, FakeFirestore)):
-        released = state.release_step("p", "c", "d", reserved_step=2)
-
-    assert released is True
-    assert db.txn.writes[0][1]["dna_step"] == 2
-    assert db.txn.writes[0][1]["last_release_reason"] == "EXECUTION_FAILED"
-    assert db.txn.writes[0][2] is True  # merge=True
-
-
-def test_release_step_leaves_pointer_when_another_invocation_advanced():
-    # Another instance already reserved step 3 (pointer at 4): rolling back
-    # to 2 would clobber its reservation, so the release must be a no-op.
-    document = FakeDocument(FakeSnapshot({"dna_step": 4}))
-    db = FakeDb(document)
-
-    with patch("state._get_firestore", return_value=(db, FakeFirestore)):
-        released = state.release_step("p", "c", "d", reserved_step=2)
-
-    assert released is False
-    assert db.txn.writes == []
-
-
-def test_release_step_never_raises():
-    with patch("state._get_firestore", side_effect=RuntimeError("firestore down")):
-        assert state.release_step("p", "c", "d", reserved_step=0) is False

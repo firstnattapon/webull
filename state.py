@@ -2,7 +2,6 @@
 
 Public API:
     reserve_step()      — transactional read-and-increment of the DNA step
-    release_step()      — transactional rollback of a failed reservation
     read_step()         — plain read (kept for local scripts / back-compat)
     increment_step()    — plain increment (kept for back-compat)
     write_trade_log()   — fire-and-forget background log write
@@ -135,6 +134,13 @@ def reserve_step(
     (``dna_step >= dna_length``) nothing is written and the returned
     reservation carries signal 0 — the caller detects timeline end by
     comparing ``dna_step`` against the DNA length.
+
+    Intentional: a reservation is never rolled back, even when the trade
+    that follows fails. Each DNA index is trained against a specific
+    scheduler time slot, so the pointer must advance exactly once per tick
+    — replaying a failed step at a later tick would shift every remaining
+    signal off its trained slot. A failed execution therefore skips its
+    signal by design (logged as status ERROR in the trade log).
     """
     try:
         db, firestore_module = _get_firestore(project_id)
@@ -171,67 +177,6 @@ def reserve_step(
         raise
     except Exception as exc:
         raise StepWriteError(f"Failed to reserve step: {exc}") from exc
-
-
-def release_step(
-    project_id: str,
-    collection: str,
-    document: str,
-    reserved_step: int,
-) -> bool:
-    """Transactionally roll back a reserved step after a failed execution.
-
-    ``reserve_step`` advances the pointer *before* the trade executes, so a
-    broker failure would otherwise burn the reserved signal (the step is
-    consumed but never traded). This compensating transaction moves the
-    pointer back to ``reserved_step`` so the next scheduler tick retries
-    the same step.
-
-    Safety properties:
-      - The rollback applies only while the document still points at
-        ``reserved_step + 1``. If another invocation has already reserved
-        a later step, the pointer is left untouched — concurrent
-        reservations are never clobbered (the step is lost in that rare
-        case, same as the old behaviour).
-      - Replaying a step is order-safe: the client order id is
-        deterministic per (strategy, symbol, step) and Webull deduplicates
-        resubmissions, so a failure *after* a successful order submit
-        cannot double-trade on retry.
-
-    Never raises (it runs on error paths); returns True when rolled back.
-    """
-    try:
-        db, firestore_module = _get_firestore(project_id)
-        doc_ref = db.collection(collection).document(document)
-        transaction = db.transaction()
-
-        @firestore_module.transactional
-        def _release(txn: Any) -> bool:
-            snapshot = doc_ref.get(transaction=txn)
-            data = (snapshot.to_dict() or {}) if snapshot.exists else {}
-            current_step = _parse_step(data.get("dna_step", 0))
-
-            if current_step != reserved_step + 1:
-                return False
-
-            txn.set(
-                doc_ref,
-                {
-                    "dna_step": reserved_step,
-                    "last_release_reason": "EXECUTION_FAILED",
-                    "last_released_at": firestore_module.SERVER_TIMESTAMP,
-                },
-                merge=True,
-            )
-            return True
-
-        return bool(_release(transaction))
-
-    except Exception as exc:
-        logger.error(
-            "Failed to release step %s (non-fatal): %s", reserved_step, exc
-        )
-        return False
 
 
 def read_step(project_id: str, collection: str, document: str) -> int:
