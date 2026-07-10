@@ -464,14 +464,15 @@ class WebullBroker:
                 "combo_type": "NORMAL",
                 "client_order_id": client_order_id,
                 "symbol": symbol,
-                # US stock order per the Webull docs / webull-openapi-thai-lab:
-                # instrument_type "EQUITY", market "US". The mandatory
-                # `category` request header ("US_STOCK") is applied by the v2
-                # order SDK, which hardcodes it from the market — so the bot
-                # places orders through the v2 order API (WEBULL_API_VERSION
-                # defaults to "v2"). The v3 SDK would derive the header as
-                # f"{market}_{instrument_type}" = "US_EQUITY", not a valid
-                # category; hence v2 is the documented path for stocks.
+                # US stock order for a Webull TH account: instrument_type
+                # "EQUITY", market "US". The bot places orders through the
+                # v3 order API (WEBULL_API_VERSION defaults to "v3") — per
+                # the SDK docstrings the v2 order endpoints support only
+                # Webull HK/US, while v3 explicitly supports Webull TH. The
+                # v3 SDK derives the `category` header from the body as
+                # f"{market}_{instrument_type}" = "US_EQUITY", which the TH
+                # endpoint accepts (verified by the Manual Test Lab, which
+                # previews/places through order_v3 with this exact payload).
                 "instrument_type": "EQUITY",
                 "market": "US",
                 "order_type": "MARKET",

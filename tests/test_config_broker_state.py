@@ -50,7 +50,9 @@ def test_broker_config_resolves_thailand_uat_and_redacts_secrets(env):
 
     assert loaded.region == "th"
     assert loaded.endpoint == "th-api.uat.webullbroker.com"
-    assert loaded.api_version == "v2"
+    # v3 is the default order API: the SDK's v2 order endpoints support only
+    # Webull HK/US, while v3 explicitly supports Webull TH (this region).
+    assert loaded.api_version == "v3"
     assert loaded.safe_dict()["app_key"] == "***alue"
     assert loaded.safe_dict()["app_secret"] == "***"
     assert "app-secret-value" not in repr(loaded)
