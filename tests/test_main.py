@@ -115,6 +115,11 @@ def test_threshold_response_and_log_payload_are_preserved(app, app_config):
     assert body["decision"]["action"] == "PASS"
     assert body["decision"]["order_qty"] == 0.0
     log_trade.assert_called_once()
+    payload = log_trade.call_args.args[1]
+    assert payload["status"] == "PASS_THRESHOLD"
+    assert payload["last_price"] == 100.0
+    assert payload["quantity"] == 10.0
+    assert payload["market_state"] == {"quantity": 10.0, "last_price": 100.0}
 
 
 def test_order_response_and_deterministic_client_id_are_preserved(app, app_config):
@@ -128,19 +133,25 @@ def test_order_response_and_deterministic_client_id_are_preserved(app, app_confi
         preview=None,
         raw_response={"order_id": "order-1"},
     )
+    log_trade = Mock()
 
     body, code, _ = invoke(
         app,
         load_app_config=Mock(return_value=app_config),
         load_broker_config=Mock(return_value=SimpleNamespace()),
         get_broker=Mock(return_value=broker_instance),
-        _log_trade=Mock(),
+        _log_trade=log_trade,
     )
 
     assert code == 200
     assert body["status"] == "OK"
     assert body["decision"]["action"] == "BUY"
     assert body["order"]["order_id"] == "order-1"
+    payload = log_trade.call_args.args[1]
+    assert payload["status"] == "ORDER_SUBMITTED"
+    assert payload["last_price"] == 100.0
+    assert payload["quantity"] == 5.0
+    assert payload["order_result"]["order_id"] == "order-1"
     kwargs = broker_instance.place_market_order.call_args.kwargs
     assert kwargs["symbol"] == "SMR"
     assert kwargs["side"] == "BUY"
@@ -167,6 +178,9 @@ def test_open_order_prevents_duplicate_rebalance_submission(app, app_config):
     assert body["decision"]["action"] == "BUY"
     broker_instance.place_market_order.assert_not_called()
     log_trade.assert_called_once()
+    payload = log_trade.call_args.args[1]
+    assert payload["status"] == "PASS_OPEN_ORDER"
+    assert payload["last_price"] == 100.0
 
 
 def test_broker_error_response_shape_is_preserved(app, app_config):
