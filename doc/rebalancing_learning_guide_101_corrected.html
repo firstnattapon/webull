@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Rebalancing Learning Guide 101 — Corrected</title>
+  <style>
+    :root{--bg:#070b14;--panel:#101827;--panel2:#151f31;--line:#293750;--text:#eef4ff;--muted:#9fb0c9;--blue:#72a7ff;--mint:#4de2bd;--gold:#ffd166;--red:#ff7d91;--shadow:0 18px 50px #0007}
+    *{box-sizing:border-box} body{margin:0;background:radial-gradient(circle at 80% 0,#16325a66,transparent 34%),radial-gradient(circle at 0 65%,#114a3d44,transparent 30%),var(--bg);color:var(--text);font-family:Inter,"Noto Sans Thai","Segoe UI",sans-serif;line-height:1.6}
+    .wrap{width:min(1180px,94%);margin:34px auto 70px}.hero,.card{border:1px solid var(--line);background:#101827e8;border-radius:22px;box-shadow:var(--shadow)}
+    .hero{padding:30px;background:linear-gradient(135deg,#17284be8,#10261fe8)} h1{font-size:clamp(30px,5vw,52px);line-height:1.12;margin:6px 0 10px}.tag{display:inline-block;padding:6px 12px;border:1px solid #72a7ff66;border-radius:999px;color:#cfe0ff;background:#72a7ff16}.lead{color:var(--muted);font-size:18px;max-width:900px;margin:0}
+    .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:18px;margin-top:18px}.card{grid-column:span 12;padding:22px}.half{grid-column:span 6}h2{font-size:24px;margin:0 0 10px}h3{margin:0 0 8px}.muted{color:var(--muted)}
+    .formula{padding:14px 16px;border-radius:14px;border:1px solid var(--line);background:#09111f;color:#eaf2ff;font:16px/1.65 Consolas,monospace;overflow:auto;white-space:pre-wrap}.formula strong{color:var(--gold)}
+    .controls{display:grid;grid-template-columns:repeat(6,1fr);gap:12px}.field label{display:block;color:var(--muted);font-size:13px;margin:0 0 5px}.field input{width:100%;border:1px solid var(--line);border-radius:11px;background:#09111f;color:var(--text);padding:10px 11px;font:inherit}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}button{cursor:pointer;border:1px solid #72a7ff66;border-radius:11px;padding:10px 15px;color:white;background:#225fbd;font-weight:700}button.secondary{background:#101b2d;border-color:var(--line)}
+    .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:18px}.stat{background:#0a1220;border:1px solid var(--line);border-radius:14px;padding:14px}.stat small{display:block;color:var(--muted)}.stat b{display:block;font-size:21px;margin-top:3px}.positive{color:var(--mint)}.negative{color:var(--red)}
+    .chart-box{height:390px;border-radius:16px;border:1px solid var(--line);background:#080f1b;padding:8px;position:relative}.chart-box canvas{width:100%;height:100%;display:block}.legend{display:flex;gap:18px;flex-wrap:wrap;margin:0 0 10px;color:var(--muted);font-size:14px}.dot{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:6px}.note{border-left:4px solid var(--gold);background:#ffd16612;padding:13px 15px;border-radius:10px;color:#e8d9a9}.good{border-left-color:var(--mint);background:#4de2bd10;color:#c9f8eb}.table-wrap{max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:14px}table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}th,td{padding:9px 12px;border-bottom:1px solid #223047;text-align:right;white-space:nowrap}th{position:sticky;top:0;background:#162238;color:#cfe0ff}th:first-child,td:first-child{text-align:center}.foot{text-align:center;color:var(--muted);margin-top:20px;font-size:13px}
+    @media(max-width:850px){.half{grid-column:span 12}.controls{grid-template-columns:repeat(2,1fr)}.stats{grid-template-columns:repeat(2,1fr)}.chart-box{height:330px}}
+  </style>
+</head>
+<body>
+<main class="wrap">
+  <header class="hero">
+    <span class="tag">Learning Guide 101 · กราฟที่ 2 แก้ไขแล้ว</span>
+    <h1>ส่วนเกินทุนจาก Rebalancing</h1>
+    <p class="lead">ทดลองสุ่มราคา 100 รอบ เปรียบเทียบกระแสเงินสดจาก Rebalancing กับเส้นอ้างอิง ln และนำส่วนเกินสะสมไปวางบนเส้นอ้างอิงตามระดับราคาอย่างถูกความหมาย</p>
+  </header>
+
+  <section class="grid">
+    <article class="card half">
+      <h2>1) เส้นอ้างอิงทางทฤษฎี</h2>
+      <div class="formula">Rₙ = Fix_c × ln(Pₙ / P₀)</div>
+      <p class="muted">เป็นกระแสเงินสดอ้างอิงของการรักษามูลค่าสินทรัพย์คงที่แบบต่อเนื่อง: ค่าบวกคือรับเงินจากการขาย และค่าลบคือใช้เงินซื้อ</p>
+    </article>
+    <article class="card half">
+      <h2>2) เส้น Rebalancing จริง</h2>
+      <div class="formula">Aₙ = Fix_c × Σ [Pᵢ / Pᵢ₋₁ − 1]
+Eₙ = Aₙ − Rₙ</div>
+      <p class="muted">Aₙ สะสมผลจากทุกช่วงราคาที่เกิดขึ้นจริง ส่วน Eₙ คือเงินเกินทุนสะสมเหนือเส้นอ้างอิง</p>
+    </article>
+
+    <article class="card">
+      <h2>Testing Lab — สุ่มราคา 100 รอบ</h2>
+      <div class="controls">
+        <div class="field"><label for="fix">Fix_c</label><input id="fix" type="number" value="1500" min="1" step="100"></div>
+        <div class="field"><label for="p0">ราคาเริ่มต้น t₀</label><input id="p0" type="number" value="100" min="0.01" step="1"></div>
+        <div class="field"><label for="vol">ความผันผวน/รอบ (%)</label><input id="vol" type="number" value="4" min="0" max="40" step="0.1"></div>
+        <div class="field"><label for="drift">แนวโน้ม/รอบ (%)</label><input id="drift" type="number" value="0" min="-10" max="10" step="0.01"></div>
+        <div class="field"><label for="steps">จำนวนรอบ</label><input id="steps" type="number" value="100" min="2" max="500" step="1"></div>
+        <div class="field"><label for="seed">Seed</label><input id="seed" type="number" value="101" step="1"></div>
+      </div>
+      <div class="actions"><button id="run">สร้างการทดสอบ</button><button class="secondary" id="newSeed">สุ่ม Seed ใหม่</button><button class="secondary" id="csv">ดาวน์โหลด CSV</button></div>
+      <div class="stats">
+        <div class="stat"><small>ราคาสุดท้าย Pₙ</small><b id="sPrice">—</b></div>
+        <div class="stat"><small>Rebalancing Aₙ</small><b id="sActual">—</b></div>
+        <div class="stat"><small>อ้างอิง Rₙ</small><b id="sRef">—</b></div>
+        <div class="stat"><small>ส่วนเกินสะสม Eₙ</small><b id="sE">—</b></div>
+      </div>
+    </article>
+
+    <article class="card">
+      <h2>กราฟที่ 1 — เปรียบเทียบตามลำดับ Rebalance</h2>
+      <div class="legend"><span><i class="dot" style="background:#72a7ff"></i>Aₙ: Rebalancing จริง</span><span><i class="dot" style="background:#ffd166"></i>Rₙ: อ้างอิง ln</span><span><i class="dot" style="background:#4de2bd"></i>Eₙ: ส่วนเกินสะสม</span></div>
+      <div class="chart-box"><canvas id="timeChart"></canvas></div>
+    </article>
+
+    <article class="card">
+      <h2>กราฟที่ 2 — เงินทุนเทียบกับระดับราคา (แก้ไข)</h2>
+      <div class="formula">แกน X: ราคา x ตั้งแต่ 0 ถึง 2t₀
+
+<strong>Y₁(x) = Fix_c × ln(x / t₀)</strong>                 ← เส้นอ้างอิง
+<strong>Y₂(x) = Y₁(x) + Eₙ</strong>                         ← เส้น Rebalancing + เงินเกินทุนสะสม</div>
+      <div class="legend"><span><i class="dot" style="background:#ffd166"></i>Y₁: เส้นอ้างอิง ln</span><span><i class="dot" style="background:#4de2bd"></i>Y₂: อ้างอิง + Eₙ</span></div>
+      <div class="chart-box"><canvas id="priceChart"></canvas></div>
+      <p class="note"><strong>จุดสำคัญ:</strong> แกนราคาเริ่มแสดงที่ 0 ตามโจทย์ แต่ไม่ลากเส้นที่ x = 0 เพราะ ln(0) ไม่มีค่าจำกัด (มุ่งสู่ −∞) การคำนวณเส้นจึงเริ่มที่ค่าบวกเล็ก ๆ ใกล้ศูนย์ ส่วน Y₂ เป็นเส้น Y₁ ที่เลื่อนขึ้นในแนวตั้งเท่ากับ Eₙ จึงมีช่องว่างคงที่เท่ากับส่วนเกินสะสม</p>
+      <p class="note good"><strong>การอ่านเครื่องหมาย:</strong> ตามสมการ ln(x/t₀) ค่าบวกหมายถึงเงินสดที่ได้รับจากการขาย และค่าลบหมายถึงเงินสดที่ใช้ซื้อ หากต้องการให้ “เงินทุนที่ใช้ซื้อ” เป็นบวก ต้องกลับเครื่องหมายเป็น Fix_c × ln(t₀/x) ซึ่งเป็นคนละ convention</p>
+    </article>
+
+    <article class="card">
+      <h2>ข้อมูลการทดสอบ</h2>
+      <div class="table-wrap"><table><thead><tr><th>รอบ</th><th>ราคา</th><th>ΔA รอบนี้</th><th>Aₙ</th><th>Rₙ</th><th>Eₙ</th></tr></thead><tbody id="rows"></tbody></table></div>
+    </article>
+  </section>
+  <p class="foot">แบบจำลองเพื่อการเรียนรู้ · ยังไม่รวมค่าธรรมเนียม spread, slippage และภาษี</p>
+</main>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const colors = {actual:'#72a7ff', ref:'#ffd166', excess:'#4de2bd', grid:'#26344b', text:'#9fb0c9', zero:'#536783'};
+  let data = [];
+  const fmt = (v,d=2) => Number(v).toLocaleString('th-TH',{minimumFractionDigits:d,maximumFractionDigits:d});
+  function rng(seed){let a=(seed>>>0)||1;return()=>{a+=0x6D2B79F5;let t=a;t=Math.imul(t^t>>>15,t|1);t^=t+Math.imul(t^t>>>7,t|61);return((t^t>>>14)>>>0)/4294967296}}
+  function normal(rand){const u=Math.max(rand(),1e-12),v=rand();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v)}
+  function values(){return{fix:Math.max(1,+$('fix').value||1500),p0:Math.max(.01,+$('p0').value||100),vol:Math.max(0,+$('vol').value||0)/100,drift:(+$('drift').value||0)/100,steps:Math.min(500,Math.max(2,+$('steps').value||100)),seed:+$('seed').value||1}}
+  function simulate(){
+    const c=values(), rand=rng(c.seed); data=[{i:0,p:c.p0,delta:0,a:0,r:0,e:0}]; let p=c.p0,a=0;
+    for(let i=1;i<=c.steps;i++){
+      const old=p; p=old*Math.exp((c.drift-.5*c.vol*c.vol)+c.vol*normal(rand)); p=Math.max(p,c.p0*1e-8);
+      const delta=c.fix*(p/old-1); a+=delta; const r=c.fix*Math.log(p/c.p0); data.push({i,p,delta,a,r,e:a-r});
+    }
+    render(c);
+  }
+  function render(c){
+    const z=data.at(-1); $('sPrice').textContent=fmt(z.p); stat('sActual',z.a); stat('sRef',z.r); stat('sE',z.e);
+    $('rows').innerHTML=data.map(d=>`<tr><td>${d.i}</td><td>${fmt(d.p,4)}</td><td>${fmt(d.delta)}</td><td>${fmt(d.a)}</td><td>${fmt(d.r)}</td><td>${fmt(d.e)}</td></tr>`).join('');
+    lineChart($('timeChart'),[
+      {name:'A',color:colors.actual,pts:data.map(d=>[d.i,d.a])},{name:'R',color:colors.ref,pts:data.map(d=>[d.i,d.r])},{name:'E',color:colors.excess,pts:data.map(d=>[d.i,d.e])}
+    ],{xmin:0,xmax:c.steps,xLabel:'ลำดับ Rebalance',yLabel:'กระแสเงินสดสะสม'});
+    const e=z.e, pts1=[],pts2=[], n=420, start=c.p0*0.002;
+    for(let i=0;i<n;i++){const x=start+(2*c.p0-start)*i/(n-1), y=c.fix*Math.log(x/c.p0);pts1.push([x,y]);pts2.push([x,y+e])}
+    lineChart($('priceChart'),[{name:'Y1',color:colors.ref,pts:pts1},{name:'Y2',color:colors.excess,pts:pts2}],{xmin:0,xmax:2*c.p0,xLabel:'ระดับราคา x (0 ถึง 2t₀)',yLabel:'กระแสเงินสด / เงินทุน',clipQuantile:.025,markers:[{x:c.p0,label:'t₀'}]});
+  }
+  function stat(id,v){const e=$(id);e.textContent=(v>=0?'+':'')+fmt(v);e.className=v>=0?'positive':'negative'}
+  function lineChart(canvas,series,opt){
+    const rect=canvas.getBoundingClientRect(),dpr=Math.min(devicePixelRatio||1,2);canvas.width=Math.max(600,rect.width*dpr);canvas.height=Math.max(320,rect.height*dpr);const ctx=canvas.getContext('2d');ctx.scale(dpr,dpr);const W=canvas.width/dpr,H=canvas.height/dpr,m={l:76,r:22,t:18,b:55},pw=W-m.l-m.r,ph=H-m.t-m.b;
+    let ys=series.flatMap(s=>s.pts.map(p=>p[1])).filter(Number.isFinite).sort((a,b)=>a-b);if(opt.clipQuantile){const k=Math.floor(ys.length*opt.clipQuantile);ys=ys.slice(k)}let ymin=Math.min(0,...ys),ymax=Math.max(0,...ys);if(ymax===ymin){ymax+=1;ymin-=1}const pad=(ymax-ymin)*.08;ymin-=pad;ymax+=pad;
+    const X=x=>m.l+(x-opt.xmin)/(opt.xmax-opt.xmin)*pw,Y=y=>m.t+(ymax-y)/(ymax-ymin)*ph;ctx.clearRect(0,0,W,H);ctx.font='12px Segoe UI';ctx.lineWidth=1;
+    for(let i=0;i<=5;i++){const y=ymin+(ymax-ymin)*i/5,py=Y(y);ctx.strokeStyle=colors.grid;ctx.beginPath();ctx.moveTo(m.l,py);ctx.lineTo(W-m.r,py);ctx.stroke();ctx.fillStyle=colors.text;ctx.textAlign='right';ctx.fillText(compact(y),m.l-9,py+4)}
+    for(let i=0;i<=5;i++){const x=opt.xmin+(opt.xmax-opt.xmin)*i/5,px=X(x);ctx.strokeStyle=colors.grid;ctx.beginPath();ctx.moveTo(px,m.t);ctx.lineTo(px,H-m.b);ctx.stroke();ctx.fillStyle=colors.text;ctx.textAlign='center';ctx.fillText(compact(x),px,H-m.b+20)}
+    if(ymin<0&&ymax>0){ctx.strokeStyle=colors.zero;ctx.setLineDash([5,5]);ctx.beginPath();ctx.moveTo(m.l,Y(0));ctx.lineTo(W-m.r,Y(0));ctx.stroke();ctx.setLineDash([])}
+    (opt.markers||[]).forEach(q=>{ctx.strokeStyle='#72a7ff88';ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(X(q.x),m.t);ctx.lineTo(X(q.x),H-m.b);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle='#a9c7ff';ctx.textAlign='center';ctx.fillText(q.label,X(q.x),m.t+12)});
+    ctx.save();ctx.beginPath();ctx.rect(m.l,m.t,pw,ph);ctx.clip();series.forEach(s=>{ctx.strokeStyle=s.color;ctx.lineWidth=2.4;ctx.beginPath();let begun=false;s.pts.forEach(([x,y])=>{if(!Number.isFinite(y)||y<ymin||y>ymax){begun=false;return}if(!begun){ctx.moveTo(X(x),Y(y));begun=true}else ctx.lineTo(X(x),Y(y))});ctx.stroke()});ctx.restore();
+    ctx.fillStyle=colors.text;ctx.textAlign='center';ctx.fillText(opt.xLabel,m.l+pw/2,H-10);ctx.save();ctx.translate(16,m.t+ph/2);ctx.rotate(-Math.PI/2);ctx.fillText(opt.yLabel,0,0);ctx.restore();
+  }
+  function compact(v){const a=Math.abs(v);if(a>=1e6)return(v/1e6).toFixed(1)+'M';if(a>=1e3)return(v/1e3).toFixed(1)+'k';return v.toFixed(a<10?1:0)}
+  function download(){const head='step,price,delta_actual,actual_cumulative,ln_reference,excess\n',body=data.map(d=>[d.i,d.p,d.delta,d.a,d.r,d.e].join(',')).join('\n'),blob=new Blob([head+body],{type:'text/csv;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='rebalancing_test.csv';a.click();URL.revokeObjectURL(a.href)}
+  $('run').onclick=simulate;$('newSeed').onclick=()=>{$('seed').value=Math.floor(Math.random()*1e9);simulate()};$('csv').onclick=download;window.addEventListener('resize',()=>render(values()));simulate();
+})();
+</script>
+</body>
+</html>
