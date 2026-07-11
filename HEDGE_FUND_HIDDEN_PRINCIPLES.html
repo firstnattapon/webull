@@ -1,0 +1,858 @@
+<!doctype html>
+<html lang="th" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="แผนที่ความจริงจาก Shannon-inspired rebalancing bot สู่หลักคิดแบบผู้จัดการกองทุนมืออาชีพ">
+  <title>Hidden Principles — จาก Rebalancing Bot สู่ Hedge Fund Thinking</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #071019;
+      --bg-2: #0b1722;
+      --surface: #101f2c;
+      --surface-2: #142735;
+      --surface-3: #0a1823;
+      --ink: #f2f6f3;
+      --ink-2: #bdcbc5;
+      --muted: #82958e;
+      --line: rgba(209, 228, 219, .14);
+      --line-strong: rgba(209, 228, 219, .25);
+      --mint: #58e0b5;
+      --mint-2: #b7f5df;
+      --amber: #f2b84b;
+      --amber-2: #ffe1a1;
+      --red: #ff7c83;
+      --red-2: #ffc1c4;
+      --blue: #74aef7;
+      --violet: #ab91ff;
+      --shadow: 0 24px 70px rgba(0, 0, 0, .28);
+      --radius: 20px;
+      --content: 1180px;
+    }
+
+    html[data-theme="light"] {
+      color-scheme: light;
+      --bg: #eef3ef;
+      --bg-2: #e5ece7;
+      --surface: #fbfdfb;
+      --surface-2: #f2f7f3;
+      --surface-3: #eaf1ec;
+      --ink: #17221d;
+      --ink-2: #46564e;
+      --muted: #718078;
+      --line: rgba(23, 34, 29, .12);
+      --line-strong: rgba(23, 34, 29, .22);
+      --mint: #087f60;
+      --mint-2: #0a5c47;
+      --amber: #9a6500;
+      --amber-2: #714a00;
+      --red: #b33b45;
+      --red-2: #842a32;
+      --blue: #2d67b2;
+      --violet: #6848c9;
+      --shadow: 0 22px 65px rgba(37, 55, 46, .12);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 92px; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 80% -10%, rgba(88, 224, 181, .13), transparent 31rem),
+        radial-gradient(circle at -8% 22%, rgba(116, 174, 247, .10), transparent 28rem),
+        var(--bg);
+      color: var(--ink);
+      font-family: "Noto Sans Thai", "Leelawadee UI", "Thonburi", "Segoe UI", system-ui, sans-serif;
+      font-size: 16px;
+      line-height: 1.72;
+      text-rendering: optimizeLegibility;
+    }
+
+    a { color: var(--blue); text-underline-offset: 3px; }
+    a:hover { color: var(--mint); }
+    button, input { font: inherit; }
+    button { color: inherit; }
+    .skip-link {
+      position: fixed; left: 1rem; top: -5rem; z-index: 100;
+      background: var(--ink); color: var(--bg); padding: .65rem 1rem; border-radius: 8px;
+    }
+    .skip-link:focus { top: 1rem; }
+    :focus-visible { outline: 3px solid var(--amber); outline-offset: 3px; }
+
+    .progress { position: fixed; inset: 0 0 auto; height: 3px; z-index: 80; background: transparent; }
+    .progress span { display: block; width: 0; height: 100%; background: linear-gradient(90deg, var(--mint), var(--amber)); }
+
+    .topbar {
+      position: sticky; top: 0; z-index: 50;
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in srgb, var(--bg) 86%, transparent);
+      backdrop-filter: blur(18px);
+    }
+    .topbar-inner {
+      width: min(var(--content), calc(100% - 2rem)); margin: auto; min-height: 70px;
+      display: flex; align-items: center; gap: 1rem;
+    }
+    .brand { display: flex; align-items: center; gap: .7rem; color: var(--ink); text-decoration: none; flex: none; }
+    .brand-mark {
+      width: 34px; aspect-ratio: 1; display: grid; place-items: center; border-radius: 10px;
+      border: 1px solid rgba(88, 224, 181, .38); background: rgba(88, 224, 181, .12); color: var(--mint);
+      font-weight: 900;
+    }
+    .brand-text { font-size: .86rem; font-weight: 800; letter-spacing: .02em; line-height: 1.2; }
+    .brand-text small { display: block; color: var(--muted); font-weight: 600; letter-spacing: .08em; }
+    nav { margin-left: auto; display: flex; gap: .2rem; overflow-x: auto; scrollbar-width: none; }
+    nav::-webkit-scrollbar { display: none; }
+    nav a {
+      color: var(--muted); text-decoration: none; white-space: nowrap; border-radius: 999px;
+      padding: .42rem .65rem; font-size: .78rem; font-weight: 700;
+    }
+    nav a:hover, nav a.active { color: var(--ink); background: var(--surface-2); }
+    .toolbar { display: flex; gap: .45rem; margin-left: .35rem; }
+    .icon-btn {
+      border: 1px solid var(--line); background: var(--surface); border-radius: 10px; min-width: 38px; height: 38px;
+      cursor: pointer; display: grid; place-items: center;
+    }
+    .icon-btn:hover { border-color: var(--line-strong); background: var(--surface-2); }
+
+    main { overflow: clip; }
+    .section { width: min(var(--content), calc(100% - 2rem)); margin: 0 auto; padding: 5.5rem 0 0; }
+    .section:last-of-type { padding-bottom: 5rem; }
+    .hero { padding-top: clamp(4rem, 8vw, 7rem); }
+    .hero-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(290px, .75fr); gap: 2rem; align-items: stretch; }
+    .eyebrow {
+      display: inline-flex; align-items: center; gap: .55rem; color: var(--mint); font-size: .76rem;
+      font-weight: 850; letter-spacing: .11em; text-transform: uppercase;
+    }
+    .eyebrow::before { content: ""; width: 1.8rem; height: 2px; background: currentColor; }
+    h1, h2, h3, p { text-wrap: pretty; }
+    h1 { margin: .85rem 0 1.15rem; font-size: clamp(2.45rem, 6.1vw, 5.5rem); line-height: 1.03; letter-spacing: -.045em; max-width: 12ch; }
+    h1 em { color: var(--mint); font-style: normal; }
+    .lede { margin: 0; max-width: 61ch; color: var(--ink-2); font-size: clamp(1.05rem, 2vw, 1.25rem); }
+    .hero-actions { display: flex; gap: .7rem; flex-wrap: wrap; margin-top: 1.6rem; }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: .45rem; min-height: 44px;
+      padding: .62rem 1rem; border-radius: 11px; border: 1px solid var(--line-strong); cursor: pointer;
+      background: var(--surface); color: var(--ink); text-decoration: none; font-weight: 800; font-size: .9rem;
+    }
+    .btn.primary { color: #052017; background: var(--mint); border-color: var(--mint); }
+    html[data-theme="light"] .btn.primary { color: white; }
+    .btn:hover { transform: translateY(-1px); box-shadow: 0 8px 24px rgba(0,0,0,.13); }
+    .hero-panel {
+      border: 1px solid var(--line); border-radius: var(--radius); background: linear-gradient(155deg, var(--surface-2), var(--surface));
+      padding: 1.45rem; box-shadow: var(--shadow); position: relative; overflow: hidden;
+    }
+    .hero-panel::after {
+      content: ""; position: absolute; width: 14rem; height: 14rem; border-radius: 50%; right: -6rem; top: -7rem;
+      background: rgba(242, 184, 75, .10); filter: blur(2px);
+    }
+    .hero-panel h2 { margin: 0 0 .45rem; font-size: 1rem; }
+    .hero-panel .big-truth { margin: .55rem 0 1.2rem; font-size: 1.55rem; line-height: 1.35; font-weight: 850; position: relative; z-index: 1; }
+    .hero-panel .big-truth span { color: var(--amber); }
+    .status-list { list-style: none; padding: 0; margin: 0; display: grid; gap: .58rem; }
+    .status-list li { display: grid; grid-template-columns: 11px 1fr auto; gap: .65rem; align-items: center; font-size: .86rem; }
+    .status-list i { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); box-shadow: 0 0 0 4px color-mix(in srgb, var(--muted) 15%, transparent); }
+    .status-list i.good { background: var(--mint); }
+    .status-list i.warn { background: var(--amber); }
+    .status-list i.miss { background: var(--red); }
+    .status-list small { color: var(--muted); }
+
+    .thesis {
+      margin-top: 2rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-3);
+      padding: 1rem; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .65rem;
+    }
+    .thesis-item { min-height: 94px; padding: .85rem; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); }
+    .thesis-item b { display: block; color: var(--mint); font-size: .8rem; letter-spacing: .08em; text-transform: uppercase; }
+    .thesis-item span { display: block; margin-top: .3rem; font-size: .9rem; line-height: 1.5; }
+    .multiply { display: none; }
+    .thesis-caption { grid-column: 1 / -1; color: var(--muted); font-size: .82rem; padding: 0 .25rem .1rem; }
+
+    .section-head { display: grid; grid-template-columns: .8fr 1.2fr; gap: 2rem; align-items: end; margin-bottom: 1.55rem; }
+    .section-no { color: var(--amber); font-size: .72rem; font-weight: 900; letter-spacing: .13em; text-transform: uppercase; }
+    h2 { margin: .32rem 0 0; font-size: clamp(1.75rem, 3.6vw, 3rem); line-height: 1.17; letter-spacing: -.026em; }
+    .section-intro { margin: 0; color: var(--ink-2); max-width: 65ch; }
+    h3 { margin: 0; font-size: 1.15rem; line-height: 1.45; }
+    .card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: 0 14px 45px rgba(0,0,0,.08); }
+    .callout { border-left: 3px solid var(--amber); background: rgba(242,184,75,.08); border-radius: 0 14px 14px 0; padding: .9rem 1rem; }
+    .callout strong { color: var(--amber-2); }
+    .callout.mint { border-left-color: var(--mint); background: rgba(88,224,181,.08); }
+    .callout.mint strong { color: var(--mint-2); }
+    .callout.red { border-left-color: var(--red); background: rgba(255,124,131,.08); }
+    .callout.red strong { color: var(--red-2); }
+    .mono { font-family: "Cascadia Mono", Consolas, "SFMono-Regular", monospace; font-variant-numeric: tabular-nums; }
+
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+    table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+    th, td { text-align: left; padding: .82rem .9rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-size: .76rem; letter-spacing: .05em; text-transform: uppercase; background: var(--surface-2); white-space: nowrap; }
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr:hover td { background: color-mix(in srgb, var(--surface-2) 60%, transparent); }
+    td code { font-size: .82em; background: var(--surface-3); padding: .12rem .32rem; border-radius: 5px; }
+    .badge { display: inline-flex; align-items: center; gap: .35rem; padding: .23rem .52rem; border-radius: 999px; border: 1px solid var(--line); font-size: .71rem; font-weight: 850; white-space: nowrap; }
+    .badge.good { color: var(--mint-2); border-color: rgba(88,224,181,.3); background: rgba(88,224,181,.09); }
+    .badge.warn { color: var(--amber-2); border-color: rgba(242,184,75,.3); background: rgba(242,184,75,.09); }
+    .badge.danger { color: var(--red-2); border-color: rgba(255,124,131,.3); background: rgba(255,124,131,.09); }
+    .badge.info { color: var(--blue); border-color: color-mix(in srgb, var(--blue) 35%, transparent); background: color-mix(in srgb, var(--blue) 9%, transparent); }
+
+    .lab-shell { padding: clamp(1rem, 3vw, 1.5rem); }
+    .lab-top { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
+    .formula-box { border: 1px solid var(--line); background: var(--surface-3); border-radius: 15px; padding: 1rem; }
+    .formula-box p { margin: .45rem 0; }
+    .formula-main { color: var(--mint-2); font-size: clamp(.9rem, 2vw, 1.05rem); overflow-x: auto; }
+    .formula-note { color: var(--muted); font-size: .82rem; }
+    .controls { display: grid; grid-template-columns: .7fr 1.7fr .65fr; gap: .7rem; }
+    label { display: block; color: var(--muted); font-size: .74rem; font-weight: 750; margin-bottom: .3rem; }
+    input {
+      width: 100%; border: 1px solid var(--line-strong); color: var(--ink); background: var(--surface-3);
+      border-radius: 10px; min-height: 42px; padding: .5rem .65rem;
+    }
+    input:focus { border-color: var(--mint); }
+    .presets { display: flex; flex-wrap: wrap; gap: .45rem; margin: .85rem 0 0; }
+    .preset {
+      border: 1px solid var(--line); background: var(--surface-2); border-radius: 999px; padding: .35rem .65rem;
+      cursor: pointer; font-size: .76rem; font-weight: 750;
+    }
+    .preset:hover, .preset.active { border-color: var(--mint); color: var(--mint-2); background: rgba(88,224,181,.08); }
+    .error { min-height: 1.4rem; margin: .45rem 0 0; color: var(--red-2); font-size: .8rem; }
+    .lab-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: .65rem; margin-top: 1rem; }
+    .stat { border: 1px solid var(--line); background: var(--surface-3); border-radius: 14px; padding: .8rem; min-width: 0; }
+    .stat small { color: var(--muted); display: block; font-size: .69rem; line-height: 1.35; min-height: 2.6em; }
+    .stat b { display: block; margin-top: .22rem; font-size: clamp(1rem, 2vw, 1.27rem); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    .stat .sub { display: block; color: var(--muted); font-size: .67rem; margin-top: .16rem; }
+    .pos { color: var(--mint-2); }
+    .neg { color: var(--red-2); }
+    .neutral { color: var(--amber-2); }
+    .lab-grid { display: grid; grid-template-columns: 1fr .95fr; gap: 1rem; margin-top: 1rem; }
+    .chart-card { border: 1px solid var(--line); background: var(--surface-3); border-radius: 15px; padding: .8rem; min-width: 0; }
+    .chart-title { display: flex; justify-content: space-between; gap: 1rem; align-items: center; margin-bottom: .4rem; }
+    .chart-title b { font-size: .86rem; }
+    .chart-title small { color: var(--muted); font-size: .68rem; }
+    #labChart { width: 100%; height: auto; display: block; min-height: 275px; }
+    .legend { display: flex; flex-wrap: wrap; gap: .3rem .8rem; color: var(--muted); font-size: .68rem; }
+    .legend i { display: inline-block; width: .85rem; border-top: 2px solid; margin-right: .3rem; vertical-align: middle; }
+    .insight { margin-top: .8rem; }
+    .lab-table { max-height: 360px; overflow: auto; border: 1px solid var(--line); border-radius: 15px; }
+    .lab-table th { position: sticky; top: 0; z-index: 1; }
+    .lab-table td, .lab-table th { text-align: right; padding: .55rem .62rem; white-space: nowrap; font-size: .74rem; }
+    .lab-table td:first-child, .lab-table th:first-child { text-align: center; }
+    .truth-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .8rem; margin-top: 1rem; }
+    .truth-card { padding: 1rem; }
+    .truth-card .tag { color: var(--amber); font-size: .7rem; letter-spacing: .08em; text-transform: uppercase; font-weight: 850; }
+    .truth-card p { color: var(--ink-2); font-size: .86rem; margin: .45rem 0 0; }
+
+    .principles { display: grid; grid-template-columns: repeat(2, 1fr); gap: .8rem; }
+    .principle { padding: 1.15rem; display: grid; grid-template-columns: 42px 1fr; gap: .85rem; }
+    .principle-no { width: 42px; height: 42px; border-radius: 12px; background: var(--surface-3); border: 1px solid var(--line); display: grid; place-items: center; color: var(--amber); font-weight: 900; }
+    .principle p { margin: .42rem 0 0; color: var(--ink-2); font-size: .88rem; }
+    .principle .test { display: block; margin-top: .65rem; padding-top: .55rem; border-top: 1px solid var(--line); color: var(--muted); font-size: .76rem; }
+    .source-link { font-size: .69rem; font-weight: 800; text-decoration: none; }
+
+    .pipeline { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: .55rem; }
+    .pipe-step { min-height: 185px; padding: .8rem; border-radius: 15px; border: 1px solid var(--line); background: var(--surface); position: relative; }
+    .pipe-step:not(:last-child)::after { content: "→"; position: absolute; right: -.48rem; top: 1.15rem; z-index: 2; color: var(--muted); font-weight: 900; }
+    .pipe-step .step-no { color: var(--muted); font-size: .66rem; font-weight: 850; letter-spacing: .08em; }
+    .pipe-step h3 { margin-top: .35rem; font-size: .9rem; }
+    .pipe-step p { margin: .48rem 0; color: var(--ink-2); font-size: .72rem; line-height: 1.55; }
+    .pipe-step .badge { position: absolute; left: .7rem; bottom: .7rem; }
+    .pipeline-note { margin-top: 1rem; display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
+
+    .risk-layout { display: grid; grid-template-columns: 1.15fr .85fr; gap: 1rem; }
+    .risk-list { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: .55rem; }
+    .risk-list li { border: 1px solid var(--line); background: var(--surface); border-radius: 14px; padding: .8rem; display: grid; grid-template-columns: 30px 1fr; gap: .65rem; }
+    .check-icon { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px; background: rgba(255,124,131,.08); color: var(--red); border: 1px solid rgba(255,124,131,.23); font-weight: 900; }
+    .risk-list b { display: block; font-size: .84rem; }
+    .risk-list small { color: var(--muted); display: block; margin-top: .2rem; font-size: .71rem; line-height: 1.5; }
+    .not-equal { padding: 1rem; }
+    .not-equal h3 { color: var(--amber-2); }
+    .not-equal ul { list-style: none; padding: 0; margin: .85rem 0 0; display: grid; gap: .46rem; }
+    .not-equal li { padding-bottom: .46rem; border-bottom: 1px dashed var(--line); font-size: .83rem; display: grid; grid-template-columns: 1fr auto 1fr; gap: .45rem; align-items: center; }
+    .not-equal li:last-child { border: 0; }
+    .not-equal .neq { color: var(--red); font-weight: 900; }
+
+    .ladder { display: grid; grid-template-columns: repeat(5, 1fr); gap: .7rem; }
+    .level { padding: 1rem; min-height: 230px; position: relative; }
+    .level .level-no { color: var(--amber); font-size: .72rem; font-weight: 900; letter-spacing: .09em; }
+    .level h3 { margin-top: .32rem; }
+    .level p { color: var(--ink-2); font-size: .78rem; margin: .5rem 0; }
+    .level ul { padding-left: 1rem; color: var(--muted); font-size: .71rem; line-height: 1.55; }
+    .current-flag { position: absolute; right: .7rem; top: .7rem; }
+    .roadmap { display: grid; grid-template-columns: repeat(3, 1fr); gap: .8rem; margin-top: 1rem; }
+    details { border: 1px solid var(--line); border-radius: 15px; background: var(--surface); padding: .85rem 1rem; }
+    summary { cursor: pointer; font-weight: 850; color: var(--mint-2); }
+    details p, details ul { color: var(--ink-2); font-size: .82rem; }
+    details ul { padding-left: 1.1rem; }
+
+    .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: .8rem; }
+    .metric { padding: 1rem; }
+    .metric .metric-type { color: var(--mint); font-size: .68rem; letter-spacing: .1em; text-transform: uppercase; font-weight: 850; }
+    .metric h3 { margin-top: .35rem; }
+    .metric p { color: var(--ink-2); font-size: .82rem; margin: .45rem 0 0; }
+    .metric code { display: block; margin-top: .6rem; color: var(--amber-2); font-size: .72rem; white-space: normal; }
+
+    .decision { display: grid; grid-template-columns: repeat(3, 1fr); gap: .8rem; }
+    .decision-card { padding: 1.1rem; }
+    .decision-card.stop { border-top: 3px solid var(--red); }
+    .decision-card.learn { border-top: 3px solid var(--amber); }
+    .decision-card.scale { border-top: 3px solid var(--mint); }
+    .decision-card ul { padding-left: 1.1rem; color: var(--ink-2); font-size: .82rem; }
+    .one-line {
+      margin-top: 1rem; padding: 1.2rem; text-align: center; border-radius: var(--radius); border: 1px solid rgba(88,224,181,.28);
+      background: linear-gradient(120deg, rgba(88,224,181,.1), rgba(116,174,247,.07)); font-size: clamp(1.05rem, 2.3vw, 1.35rem); font-weight: 850;
+    }
+
+    .sources { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .source-group { padding: 1rem; }
+    .source-group h3 { margin-bottom: .65rem; }
+    .source-list { list-style: none; padding: 0; margin: 0; display: grid; gap: .55rem; }
+    .source-list li { border-top: 1px solid var(--line); padding-top: .55rem; }
+    .source-list a { font-weight: 800; font-size: .82rem; }
+    .source-list span { display: block; color: var(--muted); font-size: .71rem; margin-top: .12rem; line-height: 1.5; }
+
+    footer { border-top: 1px solid var(--line); padding: 2rem 1rem 3rem; color: var(--muted); }
+    .footer-inner { width: min(var(--content), 100%); margin: auto; display: grid; grid-template-columns: 1fr auto; gap: 2rem; }
+    footer p { margin: 0; max-width: 75ch; font-size: .78rem; }
+    .date { white-space: nowrap; font-size: .75rem; }
+
+    @media (max-width: 1050px) {
+      nav { display: none; }
+      .toolbar { margin-left: auto; }
+      .pipeline { grid-template-columns: repeat(4, 1fr); }
+      .pipe-step:not(:last-child)::after { display: none; }
+      .ladder { grid-template-columns: repeat(2, 1fr); }
+      .level:last-child { grid-column: span 2; }
+    }
+    @media (max-width: 820px) {
+      .hero-grid, .section-head, .lab-top, .lab-grid, .risk-layout, .sources { grid-template-columns: 1fr; }
+      h1 { max-width: 15ch; }
+      .thesis { grid-template-columns: repeat(2, 1fr); }
+      .thesis-item:last-of-type { grid-column: span 2; }
+      .principles, .pipeline-note { grid-template-columns: 1fr; }
+      .lab-stats { grid-template-columns: repeat(2, 1fr); }
+      .truth-grid, .metrics, .decision, .roadmap { grid-template-columns: 1fr; }
+      .controls { grid-template-columns: 1fr 1fr; }
+      .controls .path-field { grid-column: 1 / -1; order: -1; }
+      .risk-list { grid-template-columns: 1fr; }
+      .pipeline { grid-template-columns: repeat(2, 1fr); }
+      .section { padding-top: 4.5rem; }
+    }
+    @media (max-width: 520px) {
+      .topbar-inner { width: min(100% - 1rem, var(--content)); }
+      .brand-text { display: none; }
+      .section { width: min(100% - 1rem, var(--content)); }
+      .hero { padding-top: 3rem; }
+      .thesis, .pipeline, .ladder { grid-template-columns: 1fr; }
+      .thesis-item:last-of-type, .level:last-child { grid-column: auto; }
+      .lab-stats { grid-template-columns: 1fr 1fr; }
+      .stat { padding: .65rem; }
+      .principle { grid-template-columns: 34px 1fr; }
+      .principle-no { width: 34px; height: 34px; }
+      .not-equal li { grid-template-columns: 1fr; gap: .05rem; }
+      .not-equal .neq { display: none; }
+      .footer-inner { grid-template-columns: 1fr; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
+    @media print {
+      :root, html[data-theme="light"], html[data-theme="dark"] { color-scheme: light; --bg:#fff; --surface:#fff; --surface-2:#f4f5f4; --surface-3:#f8f8f8; --ink:#111; --ink-2:#333; --muted:#666; --line:#d7d7d7; --line-strong:#aaa; --mint:#086b51; --mint-2:#07513e; --amber:#805300; --amber-2:#604000; --red:#a12e38; --red-2:#7d2028; --blue:#245b9f; --shadow:none; }
+      body { background: white; font-size: 11pt; }
+      .topbar, .progress, .hero-actions, .presets, .controls, .error { display: none !important; }
+      .section { width: 100%; padding-top: 2rem; break-inside: auto; }
+      .hero { padding-top: 0; }
+      .card, .table-wrap, .formula-box, details { box-shadow: none; break-inside: avoid; }
+      details > * { display: block !important; }
+      a { color: #111; text-decoration: none; }
+      a[href^="http"]::after { content: " (" attr(href) ")"; font-size: 7pt; overflow-wrap: anywhere; }
+      footer { padding-bottom: 0; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#content">ข้ามไปเนื้อหา</a>
+  <div class="progress" aria-hidden="true"><span id="progressBar"></span></div>
+
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#top" aria-label="กลับด้านบน">
+        <span class="brand-mark">H</span>
+        <span class="brand-text">HIDDEN PRINCIPLES<small>EVIDENCE · RISK · SURVIVAL</small></span>
+      </a>
+      <nav aria-label="สารบัญ">
+        <a href="#xray">X-ray</a>
+        <a href="#truth-lab">Truth Lab</a>
+        <a href="#principles">หลักระดับกองทุน</a>
+        <a href="#system">ระบบจริง</a>
+        <a href="#risk">Risk</a>
+        <a href="#evidence">Evidence</a>
+        <a href="#sources">แหล่งอ้างอิง</a>
+      </nav>
+      <div class="toolbar">
+        <button class="icon-btn" id="themeButton" type="button" aria-label="สลับธีม" title="สลับธีม">◐</button>
+        <button class="icon-btn" id="printButton" type="button" aria-label="พิมพ์หรือบันทึก PDF" title="พิมพ์ / PDF">↗</button>
+      </div>
+    </div>
+  </header>
+
+  <main id="content">
+    <section class="section hero" id="top">
+      <div class="hero-grid">
+        <div>
+          <span class="eyebrow">สกัดจากความรู้เดิม 6 ไฟล์</span>
+          <h1>จาก Rebalancing Bot สู่การคิดแบบ <em>Hedge Fund</em></h1>
+          <p class="lede">ความลับไม่ใช่ DNA ที่เดาราคาถูก แต่คือการแยก “แบบจำลอง” ออกจาก “เงินจริง” แล้วสร้างระบบที่พิสูจน์ edge หลังต้นทุน จำกัดความเสียหาย ตรวจ fill ได้ และอยู่รอดนานพอให้ผลลัพธ์ทบต้น</p>
+          <div class="hero-actions">
+            <a class="btn primary" href="#truth-lab">เปิดห้องทดลองความจริง ↓</a>
+            <a class="btn" href="#decision">อ่านคำตอบสรุป</a>
+          </div>
+        </div>
+        <aside class="hero-panel" aria-label="วินิจฉัยระบบปัจจุบัน">
+          <h2>วินิจฉัยแบบไม่ขายฝัน</h2>
+          <p class="big-truth">คุณมี “เครื่องยนต์กฎ” แล้ว<br><span>แต่ยังไม่ได้พิสูจน์เครื่องยนต์กำไร</span></p>
+          <ul class="status-list">
+            <li><i class="good"></i><span>Rule-based engine / gates</span><small>มีฐานดี</small></li>
+            <li><i class="good"></i><span>UAT / health / state</span><small>เริ่มดี</small></li>
+            <li><i class="warn"></i><span>Execution lifecycle</span><small>บางส่วน</small></li>
+            <li><i class="miss"></i><span>Net edge after costs</span><small>ยังไม่พิสูจน์</small></li>
+            <li><i class="miss"></i><span>Portfolio risk / sizing</span><small>ยังขาด</small></li>
+            <li><i class="miss"></i><span>Broker reconciliation</span><small>ยังขาด</small></li>
+          </ul>
+        </aside>
+      </div>
+
+      <div class="thesis" aria-label="สมการระบบกองทุนมืออาชีพ">
+        <div class="thesis-item"><b>Edge</b><span>เหตุผลที่คาดหวังผลบวก และสิ่งใดจะหักล้างมัน</span></div>
+        <div class="thesis-item"><b>Sizing</b><span>เดิมพันตามความเสี่ยง ไม่ใช่ตามความมั่นใจหรือเงินคงที่</span></div>
+        <div class="thesis-item"><b>Diversification</b><span>กระจายตัวขับผลตอบแทนและ regime ไม่ใช่แค่ชื่อหุ้น</span></div>
+        <div class="thesis-item"><b>Execution</b><span>แปลงสัญญาณเป็น fill โดยเสีย friction ให้น้อยและตรวจสอบได้</span></div>
+        <div class="thesis-item"><b>Survival</b><span>hard limits, reconciliation, kill switch และ governance</span></div>
+        <div class="thesis-caption"><strong>เป็นความสัมพันธ์แบบคูณ:</strong> ถ้าส่วนใดใกล้ศูนย์ ระบบทั้งหมดก็ใกล้ศูนย์ แม้สูตรสัญญาณจะดูสวยมาก</div>
+      </div>
+    </section>
+
+    <section class="section" id="xray">
+      <div class="section-head">
+        <div><span class="section-no">01 · X-ray</span><h2>สิ่งที่คุณรู้แล้ว<br>จริง ๆ คืออะไร</h2></div>
+        <p class="section-intro">แก่นจำนวนมากในเอกสารเดิมถูกทางแล้ว แต่บางคำถูกยกระดับจาก “กลไก” ไปเป็น “กำไร” เร็วเกินหลักฐาน ตารางนี้แยกให้เห็นทีละชั้น</p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>ของที่มีอยู่</th><th>ความหมายที่แม่น</th><th>สิ่งที่ยังไม่พิสูจน์</th><th>สถานะ</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Early-exit chain</strong><br><code>เวลา → ตลาด → DNA → broker</code></td><td>จัดลำดับ gate จากถูกไปแพง ลด failure surface</td><td>ยังไม่ใช่ risk engine; ต้องมี cash, exposure, price collar, loss และ liquidity limits</td><td><span class="badge good">ฐานดี</span></td></tr>
+            <tr><td><strong>FIX_C</strong></td><td>เป้ามูลค่า risky asset แบบ constant-dollar</td><td>เงินเท่ากันไม่เท่ากับ risk เท่ากัน และยังไม่จำกัด cash ที่ต้องเติมเมื่อราคาลง</td><td><span class="badge warn">ต้องยกระดับ</span></td></tr>
+            <tr><td><strong>DIFF</strong></td><td>no-trade band ลด noise และ turnover</td><td>ยังไม่มี cost/volatility/liquidity model ยืนยันว่า band คุ้มที่สุด</td><td><span class="badge warn">ต้องทดสอบ</span></td></tr>
+            <tr><td><strong>DNA 0/1</strong></td><td>นโยบาย sampling/permission ว่ารอบใดให้ประเมิน</td><td>DNA จาก backtest ยังไม่ใช่ alpha จนกว่าจะรอด out-of-sample และ multiple-testing control</td><td><span class="badge danger">ยังไม่ใช่ edge</span></td></tr>
+            <tr><td><strong>Aₙ</strong></td><td>gross P&amp;L/กระแสเงินสดของ ideal constant-dollar path เมื่อ rebalance เต็มทุกช่วง</td><td>ถ้ามี PASS, DNA=0 หรือ fill ไม่ตรง ต้องใช้ quantity และ fill จริงแทนสูตรลัด</td><td><span class="badge info">แบบจำลอง</span></td></tr>
+            <tr><td><strong>Rₙ</strong></td><td><span class="mono">C·ln(Pₙ/P₀)</span> เป็น log baseline ตามปลายทางราคา</td><td>ไม่ใช่บัญชีเงินจริง และไม่ใช่ buy-and-hold P&amp;L</td><td><span class="badge info">เส้นอ้างอิง</span></td></tr>
+            <tr><td><strong>Eₙ = Aₙ − Rₙ</strong></td><td>gross Jensen/volatility gap ในโมเดลไร้ friction</td><td><strong>E&gt;0 ไม่ได้แปลว่าพอร์ตมีกำไรหรือชนะ benchmark</strong></td><td><span class="badge danger">ห้ามเรียกกำไรจริง</span></td></tr>
+            <tr><td><strong>Firestore transaction</strong></td><td>กันการใช้ DNA step เดียวซ้ำ</td><td>ไม่ทำให้ DB + broker atomic; timeout หลัง broker รับ order ยังเป็นช่องคำสั่งซ้ำ</td><td><span class="badge warn">partial control</span></td></tr>
+            <tr><td><strong>Open-order guard</strong></td><td>ลดการซ้อน order ที่ broker มองเห็นแล้ว</td><td>ยังมี race, partial fill, stale status และ ambiguous retry; ต้องมี client order ID + reconciliation</td><td><span class="badge warn">partial control</span></td></tr>
+            <tr><td><strong>/health + UAT</strong></td><td>ตรวจ config/process และแยกสนามทดสอบ</td><td>health ไม่แตะ broker; UAT ไม่พิสูจน์ spread, fill, latency หรือผลจริงใน production</td><td><span class="badge warn">พร้อมทดสอบ ≠ พร้อมเทรด</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout mint" style="margin-top:1rem"><strong>ชื่อที่ตรงกว่า:</strong> ระบบนี้คือ “Shannon-inspired constant-dollar rebalancing with a no-trade band and binary sampling schedule” — ได้แรงบันดาลใจจาก Shannon แต่ไม่ใช่ canonical Shannon’s Demon ที่รักษา <em>สัดส่วน</em> risky asset ต่อความมั่งคั่งคงที่</div>
+    </section>
+
+    <section class="section" id="truth-lab">
+      <div class="section-head">
+        <div><span class="section-no">02 · Truth Lab</span><h2>เห็นกับตา:<br>E บวก แต่ยังขาดทุนได้</h2></div>
+        <p class="section-intro">ทดลองเปลี่ยนเส้นทางราคาแล้วเทียบ 5 เรื่องคนละตัว: gross P&amp;L ของ constant-dollar, log baseline, Jensen gap, buy-and-hold และผลหลังต้นทุนจำลอง</p>
+      </div>
+
+      <div class="card lab-shell">
+        <div class="lab-top">
+          <div class="formula-box">
+            <span class="badge info">THEORETICAL · FULL REBALANCE EVERY STEP</span>
+            <p class="formula-main mono">A = C Σrᵢ · R = C ln(Pₙ/P₀)<br>E = A − R = C Σ[rᵢ − ln(1+rᵢ)] ≥ 0</p>
+            <p class="formula-note">เมื่อราคาเป็นบวก, C คงที่, rebalance เต็มทุกช่วง, fractional fill ได้ และยังไม่หัก friction สำหรับ return เล็ก <span class="mono">E ≈ ½CΣrᵢ²</span></p>
+          </div>
+          <form id="labForm" novalidate>
+            <div class="controls">
+              <div><label for="capital">C · target ($)</label><input id="capital" type="number" min="1" step="100" value="1500"></div>
+              <div class="path-field"><label for="prices">เส้นทางราคา (คั่นด้วย comma)</label><input id="prices" type="text" value="100, 110, 100" inputmode="decimal"></div>
+              <div><label for="costBps">ต้นทุนรวม (bps/trade)</label><input id="costBps" type="number" min="0" step="1" value="10"></div>
+            </div>
+            <div class="presets" aria-label="ตัวอย่างเส้นทางราคา">
+              <button class="preset active" type="button" data-prices="100, 110, 100">รอบปิด ↗↘</button>
+              <button class="preset" type="button" data-prices="100, 110, 121">เทรนด์ขึ้น ↗↗</button>
+              <button class="preset" type="button" data-prices="100, 90, 81">เทรนด์ลง ↘↘</button>
+              <button class="preset" type="button" data-prices="100, 50">ราคาดิ่ง −50%</button>
+              <button class="preset" type="button" data-prices="100, 112, 94, 109, 100">แกว่งหลายรอบ</button>
+              <button class="btn primary" type="submit" style="min-height:35px;padding:.35rem .7rem;font-size:.76rem">คำนวณ</button>
+            </div>
+            <p class="error" id="labError" role="alert"></p>
+          </form>
+        </div>
+
+        <div class="lab-stats" aria-live="polite">
+          <div class="stat"><small>A · constant-$ gross P&amp;L</small><b id="statA">—</b><span class="sub">wealth = C + A</span></div>
+          <div class="stat"><small>R · scaled log baseline</small><b id="statR">—</b><span class="sub">reference only</span></div>
+          <div class="stat"><small>E = A − R · Jensen gap</small><b id="statE">—</b><span class="sub">ไม่ใช่ net profit</span></div>
+          <div class="stat"><small>B · buy-and-hold P&amp;L</small><b id="statB">—</b><span class="sub">same starting C</span></div>
+          <div class="stat"><small>D = A − B · เทียบ benchmark</small><b id="statD">—</b><span class="sub">ก่อนต้นทุน</span></div>
+          <div class="stat"><small>Net A · หลังต้นทุนจำลอง</small><b id="statNet">—</b><span class="sub" id="costText">—</span></div>
+          <div class="stat"><small>Net D · เหนือ/ต่ำกว่า B</small><b id="statNetD">—</b><span class="sub">หักต้นทุน strategy</span></div>
+          <div class="stat"><small>เงินเติมสูงสุดที่ต้องใช้</small><b id="statFunding">—</b><span class="sub">จาก cash ledger จำลอง</span></div>
+        </div>
+
+        <div class="lab-grid">
+          <div class="chart-card">
+            <div class="chart-title"><b>A / R / E / Buy &amp; Hold ตามเวลา</b><small>หน่วยดอลลาร์</small></div>
+            <svg id="labChart" viewBox="0 0 620 310" role="img" aria-label="กราฟเปรียบเทียบ A R E และ buy-and-hold"></svg>
+            <div class="legend" aria-hidden="true">
+              <span><i style="border-color:var(--mint)"></i>A</span>
+              <span><i style="border-color:var(--blue)"></i>R</span>
+              <span><i style="border-color:var(--amber)"></i>E</span>
+              <span><i style="border-color:var(--violet)"></i>Buy &amp; hold</span>
+            </div>
+            <div class="callout insight" id="labInsight"></div>
+          </div>
+          <div class="lab-table" tabindex="0" aria-label="ตารางผลการทดลองรายช่วง">
+            <table>
+              <thead><tr><th>i</th><th>P</th><th>r</th><th>ΔA</th><th>A</th><th>R</th><th>E</th><th>B</th></tr></thead>
+              <tbody id="labRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="truth-grid">
+        <article class="card truth-card"><span class="tag">จริงทางคณิตศาสตร์</span><h3>E ≥ 0 ภายใต้โมเดลแคบ</h3><p>เพราะ <span class="mono">r − ln(1+r) ≥ 0</span> เมื่อ <span class="mono">r &gt; −1</span> แต่เป็น identity ของการบวก simple return เทียบ log return ไม่ใช่ใบรับรองกำไร</p></article>
+        <article class="card truth-card"><span class="tag">จริงทางบัญชี</span><h3>ดู equity และ benchmark</h3><p>คำถาม “พอร์ตกำไรไหม” ดู <span class="mono">NAV/cash/position</span> หลัง external flows และ costs; คำถาม “ชนะไหม” ดู <span class="mono">D = A − B</span> ไม่ใช่ E</p></article>
+        <article class="card truth-card"><span class="tag">จริงในระบบสด</span><h3>ใช้ quantity กับ fills จริง</h3><p>เมื่อ DNA หรือ DIFF ทำให้ PASS สูตรแม่คือ <span class="mono">Π = Σqᵢ₋₁(Pᵢ−Pᵢ₋₁) − costs</span> เพราะ exposure ไม่ได้ reset เป็น C ทุก tick</p></article>
+      </div>
+      <div class="callout red" style="margin-top:1rem"><strong>ตัวอย่างสุดขั้วที่เปิดโปงความเข้าใจผิด:</strong> ถ้าราคาจาก 100 เข้าใกล้ศูนย์ A เข้าใกล้ −C แต่ R มุ่งสู่ −∞ จน E มุ่งสู่ +∞ — E ยิ่งใหญ่ในขณะที่ wealth พัง จึงห้ามใช้ E ตัวเดียวตัดสินคุณภาพกลยุทธ์</div>
+    </section>
+
+    <section class="section" id="principles">
+      <div class="section-head">
+        <div><span class="section-no">03 · Published Secrets</span><h2>“ความลับ” 8 ข้อ<br>ที่โลกสถาบันเปิดเผยแล้ว</h2></div>
+        <p class="section-intro">นี่ไม่ใช่สูตร proprietary ของกองทุนใด แต่เป็นหลักร่วมที่เห็นซ้ำในงานของ Bridgewater, AQR, Man Group, งานวิจัย และแนวควบคุมระบบ algorithmic trading</p>
+      </div>
+      <div class="principles">
+        <article class="card principle"><span class="principle-no">01</span><div><h3>Signal ≠ Edge</h3><p>กฎ BUY/SELL เป็นเพียงเครื่องสร้างการตัดสินใจ Edge ต้องมีเหตุผลเชิงเศรษฐศาสตร์ มีเงื่อนไขล้มเหลว และเหลือบวกหลังต้นทุน</p><span class="test"><b>บททดสอบ:</b> เขียน mechanism, benchmark และ falsification rule ก่อนรัน backtest</span></div></article>
+        <article class="card principle"><span class="principle-no">02</span><div><h3>Rebalancing คุม risk ก่อนสร้าง return</h3><p>AQR สรุปตรง ๆ ว่า rebalancing ไม่ใช่ผู้ชนะที่แน่นอน; ผลต่อ risk คาดการณ์ได้มากกว่าผลต่อ return และความถี่ต้องแลกกับ momentum/cost</p><span class="test"><b>บททดสอบ:</b> เทียบ buy-and-hold, schedule เดิม, no-DNA และ net-of-costs <a class="source-link" href="https://www.aqr.com/-/media/AQR/Documents/Insights/White-Papers/Portfolio-Rebalancing-Part-1-Strategic-Asset-Allocation.pdf" target="_blank" rel="noopener">AQR ↗</a></span></div></article>
+        <article class="card principle"><span class="principle-no">03</span><div><h3>Size ด้วย risk ไม่ใช่ดอลลาร์</h3><p><span class="mono">FIX_C</span> เท่ากันในสินทรัพย์คนละตัวให้ volatility และ tail loss ไม่เท่ากัน กรอบที่ดีกว่าดู volatility, stop distance, liquidity, cash และ portfolio risk รวม</p><span class="test"><b>บททดสอบ:</b> position ต้องผ่าน risk cap ทุกตัว ไม่ใช่เลือกสูตรเดียว; Kelly สอนเรื่อง log-growth ไม่ได้ให้สิทธิ์เชื่อ estimate แบบเต็มส่วน <a class="source-link" href="https://doi.org/10.1002/j.1538-7305.1956.tb03809.x" target="_blank" rel="noopener">Kelly ↗</a></span></div></article>
+        <article class="card principle"><span class="principle-no">04</span><div><h3>กระจาย “ตัวขับความเสี่ยง”</h3><p>Bridgewater วางสินทรัพย์ตาม growth/inflation surprises; Man เน้น diversification + risk targeting + risk management การมีหลาย ticker ที่ถูกขับด้วย equity beta เดียวกันยังไม่ใช่การกระจาย</p><span class="test"><b>บททดสอบ:</b> ดู marginal risk, correlation ในภาวะเครียด และ regime exposure <a class="source-link" href="https://www.bridgewater.com/research-and-insights/the-all-weather-story" target="_blank" rel="noopener">Bridgewater ↗</a> · <a class="source-link" href="https://www.man.com/insights/building-a-multi-strategy-portfolio" target="_blank" rel="noopener">Man ↗</a></span></div></article>
+        <article class="card principle"><span class="principle-no">05</span><div><h3>Execution เป็นส่วนหนึ่งของกลยุทธ์</h3><p>Last price ไม่ใช่ executable price, order ID ไม่ใช่ fill และ gross edge ที่เล็กกว่าสเปรด/สลิปเพจไม่มีอยู่จริง DIFF จึงควรตอบ cost-benefit ไม่ใช่เลือกด้วยความรู้สึก</p><span class="test"><b>บททดสอบ:</b> เก็บ bid/ask, timestamp, fill, implementation shortfall, reject/partial fill ทุก order</span></div></article>
+        <article class="card principle"><span class="principle-no">06</span><div><h3>Survival มาก่อน optimization</h3><p>ระบบมืออาชีพบล็อก order ที่ใหญ่/แพง/ซ้ำหรือเกินวงเงินก่อนเข้าตลาด และมีวิธี disable ได้เร็ว ไม่รอให้ signal ยอมรับว่าตัวเองผิด</p><span class="test"><b>บททดสอบ:</b> hard limits, pilot size, real-time monitor, kill drill <a class="source-link" href="https://www.sec.gov/rules-regulations/staff-guidance/trading-markets-frequently-asked-questions/divisionsmarketregfaq-0" target="_blank" rel="noopener">SEC ↗</a> · <a class="source-link" href="https://www.finra.org/rules-guidance/notices/15-09" target="_blank" rel="noopener">FINRA ↗</a></span></div></article>
+        <article class="card principle"><span class="principle-no">07</span><div><h3>Backtest ที่ดีที่สุดมักเป็นผู้ชนะ noise</h3><p>ยิ่งลอง DNA/seed/mutation มาก โอกาสเลือกโชคยิ่งสูง ต้องเก็บจำนวน trials, ทำ out-of-sample/walk-forward และปรับ Sharpe สำหรับ selection bias</p><span class="test"><b>บททดสอบ:</b> PBO/Deflated Sharpe, untouched test set, realistic costs <a class="source-link" href="https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2326253" target="_blank" rel="noopener">PBO ↗</a> · <a class="source-link" href="https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2460551" target="_blank" rel="noopener">DSR ↗</a></span></div></article>
+        <article class="card principle"><span class="principle-no">08</span><div><h3>Broker ledger คือความจริง</h3><p>transaction ใน Firestore ป้องกัน step ซ้ำ แต่ไม่รับรอง exactly-once ระหว่างระบบสองฝั่ง Order intent, client ID, lifecycle และ reconciliation ทำให้รู้ว่าเงินจริงอยู่ตรงไหน</p><span class="test"><b>บททดสอบ:</b> ทุก fill ย้อนกลับถึง signal/config/commit ได้ และ unexplained reconciliation break = 0</span></div></article>
+      </div>
+      <div class="one-line">กองทุนเก่งไม่ได้ชนะเพราะ “รู้อนาคต” อย่างเดียว — แต่มักชนะเพราะรู้ว่า <span style="color:var(--mint)">ตัวเองไม่รู้อะไร</span> แล้วจำกัดราคาที่ต้องจ่ายเมื่อผิด</div>
+    </section>
+
+    <section class="section" id="system">
+      <div class="section-head">
+        <div><span class="section-no">04 · Operating System</span><h2>กลยุทธ์ไม่ใช่ระบบ<br>ทั้งกองทุน</h2></div>
+        <p class="section-intro">บอตปัจจุบันครอบคลุมบางช่วงของสายพาน แต่ระดับมืออาชีพต้องปิดวงจรตั้งแต่ research ถึง reconciliation และ learning</p>
+      </div>
+      <div class="pipeline" aria-label="สายพานระบบเทรดมืออาชีพ">
+        <article class="pipe-step"><span class="step-no">01</span><h3>Research</h3><p>hypothesis, clean data, trial log, OOS, costs</p><span class="badge danger">ยังไม่พิสูจน์</span></article>
+        <article class="pipe-step"><span class="step-no">02</span><h3>Signal</h3><p>constant-$ rule + DIFF + DNA permission</p><span class="badge good">มีแกน</span></article>
+        <article class="pipe-step"><span class="step-no">03</span><h3>Sizing</h3><p>จาก FIX_C สู่ %NAV, vol, liquidity, cash caps</p><span class="badge warn">ยังบาง</span></article>
+        <article class="pipe-step"><span class="step-no">04</span><h3>Pre-trade Risk</h3><p>limits, stale quote, spread, calendar, loss fuse</p><span class="badge danger">ต้องเพิ่ม</span></article>
+        <article class="pipe-step"><span class="step-no">05</span><h3>OMS / Execution</h3><p>intent, idempotency, ACK/PARTIAL/FILL/CANCEL</p><span class="badge warn">บางส่วน</span></article>
+        <article class="pipe-step"><span class="step-no">06</span><h3>Reconcile</h3><p>orders + fills + cash + position เทียบ broker</p><span class="badge danger">ต้องเพิ่ม</span></article>
+        <article class="pipe-step"><span class="step-no">07</span><h3>Accounting</h3><p>NAV, external flows, net P&amp;L, attribution</p><span class="badge warn">log ≠ ledger</span></article>
+        <article class="pipe-step"><span class="step-no">08</span><h3>Monitor / Learn</h3><p>alerts, drift, incidents, kill, model review</p><span class="badge warn">ต้องขยาย</span></article>
+      </div>
+      <div class="pipeline-note">
+        <div class="callout"><strong>Exactly-once illusion:</strong> ถ้า broker รับ order แล้ว network timeout ก่อนเขียน Firestore ระบบอาจไม่รู้ว่าส่งสำเร็จ การ retry write แบบมืด ๆ อาจสร้าง order ซ้ำ</div>
+        <div class="callout mint"><strong>หลักแก้:</strong> บันทึก deterministic order intent ก่อนส่ง → ใช้ client order ID → ติดตาม lifecycle → reconcile กับ broker ซึ่งเป็น source of truth</div>
+      </div>
+    </section>
+
+    <section class="section" id="risk">
+      <div class="section-head">
+        <div><span class="section-no">05 · Risk Before Order</span><h2>10 ประตูที่เงินจริง<br>ต้องผ่าน</h2></div>
+        <p class="section-intro">Gate เดิมช่วยประหยัด request แต่ประตูด้านล่างช่วยป้องกันการล้มละลาย ความเสียหายจากข้อมูลผิด และ order ที่ไม่สามารถย้อนตรวจได้</p>
+      </div>
+      <div class="risk-layout">
+        <ol class="risk-list">
+          <li><span class="check-icon">1</span><div><b>Account / environment allowlist</b><small>strategy ถูก arm อย่างชัดเจน และ UAT/Prod แยก credentials/project</small></div></li>
+          <li><span class="check-icon">2</span><div><b>Official session / halt / corporate action</b><small>holiday, early close, DST, halt, split ไม่ใช้แค่ จ–ศ 09:30–16:00</small></div></li>
+          <li><span class="check-icon">3</span><div><b>Fresh executable market data</b><small>timestamp, bid/ask, spread, price deviation และ entitlement ผ่านเกณฑ์</small></div></li>
+          <li><span class="check-icon">4</span><div><b>Buying power / lot / tick</b><small>cash, margin, fractional support, min notional และ rounding ถูกต้อง</small></div></li>
+          <li><span class="check-icon">5</span><div><b>Order / position / concentration cap</b><small>limit ต่อ order, symbol, strategy และ portfolio รวมแบบ hard block</small></div></li>
+          <li><span class="check-icon">6</span><div><b>Daily loss / drawdown / turnover fuse</b><small>signal override limit ไม่ได้ และ risk team/operator ปิดได้</small></div></li>
+          <li><span class="check-icon">7</span><div><b>Liquidity / impact cap</b><small>เทียบ order กับ volume/ADV และประมาณ implementation cost</small></div></li>
+          <li><span class="check-icon">8</span><div><b>Unique order intent</b><small>deterministic client ID, per-symbol serialization, unresolved intent = block</small></div></li>
+          <li><span class="check-icon">9</span><div><b>Lifecycle to final state</b><small>ACK ไม่ใช่ fill; รองรับ partial, reject, cancel และ cancel/replace</small></div></li>
+          <li><span class="check-icon">10</span><div><b>Post-trade reconciliation</b><small>cash/position/order/fill ตรง broker; mismatch แจ้งเตือนและหยุดระบบ</small></div></li>
+        </ol>
+        <aside class="card not-equal">
+          <h3>8 สมการ “รู้ทัน” ที่ต้องจำ</h3>
+          <ul>
+            <li><span>DNA = 1</span><span class="neq">≠</span><span>มี edge</span></li>
+            <li><span>E &gt; 0</span><span class="neq">≠</span><span>พอร์ตกำไร</span></li>
+            <li><span>Latest price</span><span class="neq">≠</span><span>ราคาที่ fill ได้</span></li>
+            <li><span>Preview ผ่าน</span><span class="neq">≠</span><span>ปลอดภัย / dry-run</span></li>
+            <li><span>Order ID</span><span class="neq">≠</span><span>Filled</span></li>
+            <li><span>DB transaction</span><span class="neq">≠</span><span>Exactly-once order</span></li>
+            <li><span>HEALTHY</span><span class="neq">≠</span><span>พร้อมเทรดจริง</span></li>
+            <li><span>UAT ผ่าน</span><span class="neq">≠</span><span>Production edge</span></li>
+          </ul>
+          <div class="callout red" style="margin-top:.9rem"><strong>อันตรายเฉพาะในไฟล์เดิม:</strong> <span class="mono">WEBULL_PREVIEW_ORDERS=true</span> ยังไปเรียก <span class="mono">place_order</span> ต่อ จึงไม่ใช่ true dry-run</div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="section" id="evidence">
+      <div class="section-head">
+        <div><span class="section-no">06 · Evidence Ladder</span><h2>เลื่อนระดับด้วยหลักฐาน<br>ไม่ใช่ด้วย P&amp;L สวย</h2></div>
+        <p class="section-intro">ระบบปัจจุบัน deploy UAT ได้ แต่ “ความพร้อมเชิงปฏิบัติการ” กับ “หลักฐานเชิงลงทุน” เป็นคนละแกน ต้องผ่าน exit criteria ทั้งคู่ก่อนขยายเงินจริง</p>
+      </div>
+      <div class="ladder">
+        <article class="card level"><span class="level-no">L1</span><span class="badge good current-flag">ฐานปัจจุบัน</span><h3>Deployable UAT</h3><p>deploy, scheduler, state, health, auth และ log พื้นฐาน</p><ul><li>100 invocation ไม่มี unhandled error</li><li>state รอด restart/revision</li><li>config มี type/unit/range/owner</li><li>runbook + risk register</li></ul></article>
+        <article class="card level"><span class="level-no">L2</span><h3>Safe Single Strategy</h3><p>true shadow, hard limits, idempotency และ reconcile</p><ul><li>shadow 1,000 events, order endpoint = 0</li><li>duplicate/crash injection ผ่าน</li><li>UAT reconcile 10 sessions, break = 0</li><li>kill switch + alerts</li></ul></article>
+        <article class="card level"><span class="level-no">L3</span><h3>Controlled Pilot</h3><p>วงเงินถูก enforce, approval, traceability และ daily ops</p><ul><li>risk mandate เป็นตัวเลข</li><li>rollback / kill drill</li><li>ทุก fill trace ถึง commit/config</li><li>20 sessions ไม่มี limit breach</li></ul></article>
+        <article class="card level"><span class="level-no">L4</span><h3>Portfolio OS</h3><p>หลาย strategy ใช้ risk, execution และ accounting กลาง</p><ul><li>NAV/reconcile รวมตรง broker</li><li>risk contribution + correlation</li><li>cost/capacity per strategy</li><li>T+1 attribution</li></ul></article>
+        <article class="card level"><span class="level-no">L5</span><h3>Institutional Grade</h3><p>independent risk/ops, immutable audit, DR และ governance</p><ul><li>two-person approval</li><li>risk หยุดระบบได้เอง</li><li>independent model review</li><li>regulatory/legal fit ตามเขตจริง</li></ul></article>
+      </div>
+
+      <div class="roadmap">
+        <details open><summary>วัน 1–30 · ทำความจริงให้วัดได้</summary><ul><li>freeze การขยายเงินจริง</li><li>true shadow mode ที่ไม่มี code path ส่ง order</li><li>actual-fill ledger + config schema</li><li>secret manager, CI, heartbeat, runbook</li><li>นิยาม NAV, external flows และ benchmark ก่อน</li></ul></details>
+        <details><summary>วัน 31–60 · ปิดช่อง order และ risk</summary><ul><li>order-intent ledger + client ID</li><li>ACK/PARTIAL/FILL/REJECT/CANCEL state machine</li><li>broker reconciliation อัตโนมัติ</li><li>hard limits + stale/liquidity checks</li><li>timeout/duplicate/crash/holiday tests</li></ul></details>
+        <details><summary>วัน 61–90 · Pilot เฉพาะเมื่อ L2 ผ่าน</summary><ul><li>แยก UAT/Prod ชัดเจน</li><li>risk mandate และวงเงิน hard-enforced</li><li>เก็บ spread/slippage/shortfall ทุก order</li><li>daily reconciliation + operator checklist</li><li>ห้ามเพิ่มทุน/strategy ระหว่าง pilot</li></ul></details>
+      </div>
+      <div class="callout" style="margin-top:1rem"><strong>ความจริง:</strong> 90 วันอาจพิสูจน์ control และ operation ได้ แต่ไม่พอพิสูจน์ alpha ข้ามหลาย regime — promotion ใช้ exit criteria ไม่ใช่วันในปฏิทินหรือกำไรไม่กี่สัปดาห์</div>
+    </section>
+
+    <section class="section" id="metrics">
+      <div class="section-head">
+        <div><span class="section-no">07 · Accounting Truth</span><h2>Dashboard ที่ผู้จัดการทุน<br>ควรดูจริง</h2></div>
+        <p class="section-intro">เปลี่ยนจุดศูนย์กลางจากกราฟ E เพียงเส้นเดียว ไปเป็น accounting, benchmark, risk, execution และ operational truth</p>
+      </div>
+      <div class="metrics">
+        <article class="card metric"><span class="metric-type">Account truth</span><h3>NAV หลังปรับ external flows</h3><p>ตอบว่าเงินจริงทั้งบัญชีโตหรือหด โดยรวม cash, position, dividends, financing และทุกต้นทุน</p><code>Return = ΔNAV adjusted for deposits/withdrawals</code></article>
+        <article class="card metric"><span class="metric-type">Benchmark truth</span><h3>Net excess vs predeclared benchmark</h3><p>เปรียบ buy-and-hold, no-DNA, fixed schedule และ cash ด้วยต้นทุน/ช่วงเวลาเดียวกัน</p><code>D_net = strategy net P&amp;L − benchmark net P&amp;L</code></article>
+        <article class="card metric"><span class="metric-type">Risk truth</span><h3>Drawdown / vol / tail / exposure</h3><p>กำไรโดยไม่บอกความเสี่ยงไม่มีความหมาย ต้องเห็น max drawdown, concentration, beta/factors และ cash-at-risk</p><code>Risk budget ≠ FIX_C</code></article>
+        <article class="card metric"><span class="metric-type">Execution truth</span><h3>Fill, spread, slippage, shortfall</h3><p>วัดระยะห่างจาก decision price ถึง fill และต้นทุนต่อหน่วย turnover รวม reject/partial fill</p><code>Net edge = gross edge − all-in friction</code></article>
+        <article class="card metric"><span class="metric-type">Research truth</span><h3>OOS + trial-adjusted evidence</h3><p>รายงาน train/validation/test แยกชัด, จำนวน DNA ที่ลอง, DSR/PBO, turnover และ capacity</p><code>Best backtest ≠ expected live Sharpe</code></article>
+        <article class="card metric"><span class="metric-type">Operational truth</span><h3>Reconciliation breaks และ limit breaches</h3><p>สองตัวนี้เป้าหมายคือศูนย์ พร้อม stale quote, unresolved intent, duplicate order และ heartbeat alerts</p><code>Internal state must reconcile to broker</code></article>
+      </div>
+    </section>
+
+    <section class="section" id="decision">
+      <div class="section-head">
+        <div><span class="section-no">08 · Decision Card</span><h2>อ่านหนึ่งหน้าจอ<br>แล้วรู้ว่าต้องทำอะไร</h2></div>
+        <p class="section-intro">คำตอบไม่ใช่ “เปิดหรือปิด bot” แต่คือรู้ว่าหลักฐานระดับใดอนุญาตให้ทำอะไรได้ โดยไม่ข้ามขั้น</p>
+      </div>
+      <div class="decision">
+        <article class="card decision-card stop"><h3>หยุดก่อน — ถ้ายังมีข้อใดข้อหนึ่ง</h3><ul><li>ไม่มี true dry-run ที่รับประกันว่าไม่ place order</li><li>ไม่มี hard max order/position/loss/drawdown</li><li>ไม่รู้ order accepted แล้ว fill เท่าไร</li><li>ไม่มี broker reconciliation</li><li>รายงาน E เป็นกำไรจริงจาก quote ticks</li><li>cash ที่ต้องเติมเมื่อราคาลงไม่มีเพดาน</li></ul></article>
+        <article class="card decision-card learn"><h3>เรียนรู้ต่ออย่างปลอดภัย</h3><ul><li>สร้าง actual-fill accounting และ benchmark</li><li>บันทึกทุก DNA trial และ untouched OOS</li><li>จำลอง fee/spread/slippage/latency/rounding</li><li>stress asset crash, trend, gap, halt, outage</li><li>ทำ duplicate/timeout/partial-fill chaos tests</li><li>รัน UAT/shadow จน reconciliation break = 0</li></ul></article>
+        <article class="card decision-card scale"><h3>ขยายได้เมื่อ “หลักฐาน” อนุญาต</h3><ul><li>net edge รอด benchmark และ costs</li><li>risk mandate เป็นตัวเลขและ hard-enforced</li><li>live pilot ผ่านจำนวน session ที่กำหนดไว้ล่วงหน้า</li><li>drawdown/shortfall/limits อยู่ในกรอบ</li><li>ทุก fill trace และ reconcile ได้</li><li>independent review/approval ก่อนเพิ่ม risk</li></ul></article>
+      </div>
+      <div class="one-line">ประโยคเดียวจบ: <span style="color:var(--amber)">Alpha หาเงิน</span> · <span style="color:var(--blue)">Sizing กำหนดความเร็ว</span> · <span style="color:var(--mint)">Risk และ Operations ทำให้ไม่ตายก่อน</span></div>
+    </section>
+
+    <section class="section" id="sources">
+      <div class="section-head">
+        <div><span class="section-no">09 · Sources</span><h2>หลักฐานที่ใช้<br>และที่มาความรู้เดิม</h2></div>
+        <p class="section-intro">แหล่งภายนอกช่วยวางกรอบ ไม่ได้พิสูจน์บอตนี้โดยตรง การพิสูจน์ต้องมาจากข้อมูล, fills, controls และผล out-of-sample ของระบบคุณเอง</p>
+      </div>
+      <div class="sources">
+        <div class="card source-group">
+          <h3>ไฟล์ต้นทางในโฟลเดอร์นี้</h3>
+          <ul class="source-list">
+            <li><a href="LEARNING_GUIDE.md">LEARNING_GUIDE.md</a><span>architecture, gates, FIX_C/DIFF/DNA, state และ error model</span></li>
+            <li><a href="LIVE_TESTING.md">LIVE_TESTING.md</a><span>UAT, health, endpoint, preview semantics และ production checklist</span></li>
+            <li><a href="QUICKSTART.md">QUICKSTART.md</a><span>Console deployment, auth, scheduler และ operations</span></li>
+            <li><a href="QUICKSTART_CLOUD_SHELL.md">QUICKSTART_CLOUD_SHELL.md</a><span>deployment workflow, IAM, troubleshooting และ production switch</span></li>
+            <li><a href="rebalancing_learning_guide_101_corrected.html">rebalancing_learning_guide_101_corrected.html</a><span>interactive A/R/E simulation และกราฟอ้างอิง</span></li>
+            <li><a href="rebalancing101.html">rebalancing101.html</a><span>mental model, accounting explanation, PASS/anchor และ dashboard reading</span></li>
+          </ul>
+        </div>
+        <div class="card source-group">
+          <h3>งานอ้างอิงระดับสถาบัน / งานต้นฉบับ</h3>
+          <ul class="source-list">
+            <li><a href="https://www.aqr.com/-/media/AQR/Documents/Insights/White-Papers/Portfolio-Rebalancing-Part-1-Strategic-Asset-Allocation.pdf" target="_blank" rel="noopener">AQR — Portfolio Rebalancing, Part 1 ↗</a><span>rebalancing ไม่รับประกัน return; risk, frequency, momentum และ cost trade-off</span></li>
+            <li><a href="https://www.bridgewater.com/research-and-insights/the-all-weather-story" target="_blank" rel="noopener">Bridgewater — The All Weather Story ↗</a><span>risk balance ตาม growth/inflation environments และยอมรับว่าอนาคตไม่รู้แน่</span></li>
+            <li><a href="https://www.man.com/insights/building-a-multi-strategy-portfolio" target="_blank" rel="noopener">Man Group — Building a Multi-Strategy Portfolio ↗</a><span>diversification, risk targeting, risk management และ financing</span></li>
+            <li><a href="https://www.aqr.com/Insights/Research/Journal-Article/A-Century-of-Evidence-on-Trend-Following-Investing" target="_blank" rel="noopener">AQR — A Century of Evidence on Trend Following ↗</a><span>ตัวอย่างการทดสอบ rule เดียวข้ามตลาดและยุค ไม่ใช่การเลือกเส้นทางเดียว</span></li>
+            <li><a href="https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2326253" target="_blank" rel="noopener">Bailey et al. — Probability of Backtest Overfitting ↗</a><span>วิธีประเมินความเสี่ยงเลือก strategy ที่ชนะเพราะ overfit</span></li>
+            <li><a href="https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2460551" target="_blank" rel="noopener">Bailey &amp; López de Prado — Deflated Sharpe Ratio ↗</a><span>ปรับ Sharpe สำหรับ selection bias, multiple testing และ non-normality</span></li>
+            <li><a href="https://www.finra.org/rules-guidance/notices/15-09" target="_blank" rel="noopener">FINRA Regulatory Notice 15-09 ↗</a><span>development, independent testing, pilot, quick disable, monitoring และ reconciliation</span></li>
+            <li><a href="https://www.sec.gov/rules-regulations/staff-guidance/trading-markets-frequently-asked-questions/divisionsmarketregfaq-0" target="_blank" rel="noopener">SEC — Market Access Risk Controls FAQ ↗</a><span>pre-trade credit/capital, price/size, duplicate-order และ access controls</span></li>
+            <li><a href="https://www.nfa.futures.org/rulebooksql/rules.aspx?RuleID=RULE+2-29&amp;Section=4" target="_blank" rel="noopener">NFA Rule 2-29 — Hypothetical Results ↗</a><span>ข้อจำกัดของผล hypothetical/backtested และ hindsight</span></li>
+            <li><a href="https://www.nber.org/papers/w22208" target="_blank" rel="noopener">Moreira &amp; Muir — Volatility Managed Portfolios ↗</a><span>ตัวอย่างงานวิจัยเรื่องลด exposure เมื่อ volatility สูง; ไม่ใช่คำสั่งใช้กับบอตโดยตรง</span></li>
+            <li><a href="https://doi.org/10.1002/j.1538-7305.1956.tb03809.x" target="_blank" rel="noopener">Kelly (1956) — A New Interpretation of Information Rate ↗</a><span>เป้าหมายการเติบโตแบบ log ภายใต้ความน่าจะเป็น/odds ที่ระบุ</span></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="footer-inner">
+      <p><strong>ขอบเขต:</strong> เอกสารเพื่อการเรียนรู้และออกแบบระบบ ไม่ใช่คำแนะนำซื้อขายหรือการรับรองผลตอบแทน ตัวอย่างต้นทุนเป็นเพียงสมมติฐาน ผู้ใช้ต้องตรวจข้อกำกับ ภาษี สิทธิ์ API และความเหมาะสมกับบัญชี/เขตอำนาจจริงเอง</p>
+      <span class="date">ฉบับสังเคราะห์ · 11 ก.ค. 2026</span>
+    </div>
+  </footer>
+
+  <script>
+  (() => {
+    "use strict";
+
+    const root = document.documentElement;
+    const $ = (id) => document.getElementById(id);
+    const colors = () => {
+      const css = getComputedStyle(root);
+      return {
+        mint: css.getPropertyValue('--mint').trim(),
+        blue: css.getPropertyValue('--blue').trim(),
+        amber: css.getPropertyValue('--amber').trim(),
+        violet: css.getPropertyValue('--violet').trim(),
+        line: css.getPropertyValue('--line-strong').trim(),
+        muted: css.getPropertyValue('--muted').trim(),
+        surface: css.getPropertyValue('--surface-3').trim()
+      };
+    };
+
+    // Theme and print controls.
+    try {
+      const saved = localStorage.getItem('hf-truth-theme');
+      if (saved === 'light' || saved === 'dark') root.dataset.theme = saved;
+    } catch (_) {}
+    $('themeButton').addEventListener('click', () => {
+      root.dataset.theme = root.dataset.theme === 'light' ? 'dark' : 'light';
+      try { localStorage.setItem('hf-truth-theme', root.dataset.theme); } catch (_) {}
+      runLab();
+    });
+    $('printButton').addEventListener('click', () => window.print());
+
+    // Reading progress and current section.
+    const updateProgress = () => {
+      const max = document.documentElement.scrollHeight - innerHeight;
+      $('progressBar').style.width = `${max > 0 ? Math.min(100, scrollY / max * 100) : 0}%`;
+    };
+    addEventListener('scroll', updateProgress, { passive: true });
+    addEventListener('resize', updateProgress);
+    updateProgress();
+
+    const navLinks = [...document.querySelectorAll('nav a')];
+    const observed = navLinks.map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean);
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver(entries => {
+        const visible = entries.filter(e => e.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        if (!visible) return;
+        navLinks.forEach(a => a.classList.toggle('active', a.getAttribute('href') === `#${visible.target.id}`));
+      }, { rootMargin: '-15% 0px -65% 0px', threshold: [0, .15, .4] });
+      observed.forEach(s => observer.observe(s));
+    }
+
+    // Truth Lab.
+    const fmt = (value, digits = 2) => {
+      const v = Math.abs(value) < 0.0000001 ? 0 : value;
+      return new Intl.NumberFormat('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(v);
+    };
+    const money = value => `${value > 0 ? '+' : value < 0 ? '−' : ''}$${fmt(Math.abs(value))}`;
+    const setStat = (id, value) => {
+      const el = $(id);
+      el.textContent = money(value);
+      el.className = value > 0.000001 ? 'pos' : value < -0.000001 ? 'neg' : 'neutral';
+    };
+    const parsePrices = text => text.split(/[\s,>→]+/).filter(Boolean).map(Number);
+
+    function calculate(capital, prices, costBps) {
+      const p0 = prices[0];
+      let a = 0, cost = 0, minNetCash = 0;
+      const rows = [{ i: 0, p: p0, r: 0, delta: 0, a: 0, rline: 0, e: 0, b: 0, cost: 0, net: 0 }];
+      for (let i = 1; i < prices.length; i++) {
+        const r = prices[i] / prices[i - 1] - 1;
+        const delta = capital * r;
+        a += delta;
+        cost += Math.abs(delta) * costBps / 10000;
+        const rline = capital * Math.log(prices[i] / p0);
+        const e = a - rline;
+        const b = capital * (prices[i] / p0 - 1);
+        const net = a - cost;
+        minNetCash = Math.min(minNetCash, net);
+        rows.push({ i, p: prices[i], r, delta, a, rline, e, b, cost, net });
+      }
+      const last = rows[rows.length - 1];
+      return { rows, a: last.a, rline: last.rline, e: last.e, b: last.b, d: last.a - last.b, cost, net: last.net, netD: last.net - last.b, funding: -minNetCash };
+    }
+
+    function drawChart(rows) {
+      const svg = $('labChart');
+      const c = colors();
+      const W = 620, H = 310, m = { l: 63, r: 18, t: 18, b: 42 };
+      const pw = W - m.l - m.r, ph = H - m.t - m.b;
+      const all = rows.flatMap(d => [d.a, d.rline, d.e, d.b]).filter(Number.isFinite);
+      let min = Math.min(0, ...all), max = Math.max(0, ...all);
+      if (max === min) { max += 1; min -= 1; }
+      const pad = (max - min) * .1;
+      min -= pad; max += pad;
+      const X = i => m.l + (rows.length === 1 ? 0 : i / (rows.length - 1)) * pw;
+      const Y = v => m.t + (max - v) / (max - min) * ph;
+      const esc = value => String(value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+      let html = `<rect x="0" y="0" width="${W}" height="${H}" rx="10" fill="${esc(c.surface)}"/>`;
+      for (let i = 0; i <= 5; i++) {
+        const value = min + (max - min) * i / 5;
+        const y = Y(value);
+        html += `<line x1="${m.l}" y1="${y}" x2="${W - m.r}" y2="${y}" stroke="${esc(c.line)}" stroke-width="1"/>`;
+        html += `<text x="${m.l - 8}" y="${y + 4}" text-anchor="end" fill="${esc(c.muted)}" font-size="10" font-family="Consolas,monospace">${esc(fmt(value, Math.abs(value) < 10 ? 1 : 0))}</text>`;
+      }
+      rows.forEach((row, i) => {
+        html += `<text x="${X(i)}" y="${H - 15}" text-anchor="middle" fill="${esc(c.muted)}" font-size="10" font-family="Consolas,monospace">${i}</text>`;
+      });
+      if (min < 0 && max > 0) html += `<line x1="${m.l}" y1="${Y(0)}" x2="${W - m.r}" y2="${Y(0)}" stroke="${esc(c.muted)}" stroke-dasharray="4 4"/>`;
+      const series = [
+        { key: 'a', color: c.mint }, { key: 'rline', color: c.blue },
+        { key: 'e', color: c.amber }, { key: 'b', color: c.violet }
+      ];
+      series.forEach(s => {
+        const points = rows.map((row, i) => `${X(i)},${Y(row[s.key])}`).join(' ');
+        html += `<polyline points="${points}" fill="none" stroke="${esc(s.color)}" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/>`;
+        rows.forEach((row, i) => { html += `<circle cx="${X(i)}" cy="${Y(row[s.key])}" r="3" fill="${esc(s.color)}"/>`; });
+      });
+      html += `<text x="${m.l + pw / 2}" y="${H - 2}" text-anchor="middle" fill="${esc(c.muted)}" font-size="10">ลำดับราคา / rebalance</text>`;
+      svg.innerHTML = html;
+    }
+
+    function insightFor(result) {
+      const costErased = result.d > 0 && result.netD <= 0;
+      if (result.a < 0 && result.e > 0) return `<strong>E เป็นบวก แต่กลยุทธ์ขาดทุน:</strong> A = ${money(result.a)} ขณะที่ E = ${money(result.e)} นี่พิสูจน์ว่า Jensen gap ไม่ใช่ wealth หรือ net profit`;
+      if (result.d < 0 && result.e > 0) return `<strong>E เป็นบวก แต่แพ้ buy-and-hold:</strong> D = ${money(result.d)} เพราะเทรนด์ทางเดียวทำให้ constant-dollar ขายผู้ชนะเร็วหรือซื้อผู้แพ้เพิ่ม`;
+      if (costErased) return `<strong>gross ชนะ แต่ friction กินหมด:</strong> D ก่อนต้นทุน = ${money(result.d)} แต่ Net D = ${money(result.netD)}`;
+      if (result.d > 0) return `<strong>เส้นทางกลับทิศช่วย rebalancing:</strong> gross เหนือ buy-and-hold ${money(result.d)} และหลังต้นทุนจำลองเหลือ ${money(result.netD)} — ยังไม่รวมภาษี/financing/market impact`;
+      return `<strong>ผลเท่ากันในกรอบนี้:</strong> อย่าอ่านจาก E เพียงตัวเดียว ให้ดู NAV, D และต้นทุนร่วมกัน`;
+    }
+
+    function runLab(event) {
+      if (event) event.preventDefault();
+      const capital = Number($('capital').value);
+      const prices = parsePrices($('prices').value);
+      const costBps = Number($('costBps').value);
+      const invalid = !Number.isFinite(capital) || capital <= 0 || prices.length < 2 || prices.some(p => !Number.isFinite(p) || p <= 0) || !Number.isFinite(costBps) || costBps < 0;
+      if (invalid) {
+        $('labError').textContent = 'กรุณาใส่ C > 0, ราคาเป็นบวกอย่างน้อย 2 จุด และต้นทุน ≥ 0';
+        return;
+      }
+      $('labError').textContent = '';
+      const result = calculate(capital, prices, costBps);
+      setStat('statA', result.a); setStat('statR', result.rline); setStat('statE', result.e); setStat('statB', result.b);
+      setStat('statD', result.d); setStat('statNet', result.net); setStat('statNetD', result.netD); setStat('statFunding', result.funding);
+      $('costText').textContent = `cost = $${fmt(result.cost)} (${fmt(costBps, 0)} bps)`;
+      $('labRows').innerHTML = result.rows.map(row => `<tr><td>${row.i}</td><td>${fmt(row.p, 4)}</td><td class="${row.r >= 0 ? 'pos' : 'neg'}">${row.r >= 0 ? '+' : ''}${fmt(row.r * 100, 2)}%</td><td>${money(row.delta)}</td><td>${money(row.a)}</td><td>${money(row.rline)}</td><td>${money(row.e)}</td><td>${money(row.b)}</td></tr>`).join('');
+      $('labInsight').innerHTML = insightFor(result);
+      drawChart(result.rows);
+    }
+
+    $('labForm').addEventListener('submit', runLab);
+    document.querySelectorAll('.preset').forEach(button => button.addEventListener('click', () => {
+      document.querySelectorAll('.preset').forEach(b => b.classList.remove('active'));
+      button.classList.add('active');
+      $('prices').value = button.dataset.prices;
+      runLab();
+    }));
+    ['capital', 'prices', 'costBps'].forEach(id => $(id).addEventListener('change', runLab));
+    runLab();
+  })();
+  </script>
+</body>
+</html>

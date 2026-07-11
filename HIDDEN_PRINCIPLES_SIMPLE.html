@@ -1,0 +1,499 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="สกัดหลักการที่ซ่อนอยู่ในระบบ Shannon Demon Bot ให้เหลือ 7 ข้อ + 1 ความลับสุดท้าย — ฉบับง่าย อ่าน 10 นาที รู้ทันทั้งวงการ">
+<title>ความลับที่ซ่อนอยู่ — ฉบับง่าย รู้ทันใน 10 นาที</title>
+<style>
+:root {
+  --page: #F1F4F0;
+  --surface: #FBFCFA;
+  --surface-2: #EAEFE9;
+  --ink: #1B241E;
+  --ink-2: #55605A;
+  --muted: #83908A;
+  --hairline: rgba(27, 36, 30, 0.13);
+  --gold: #B07C1B;        /* ความลับ / กำไรจริง Eₙ */
+  --gold-wash: rgba(176, 124, 27, 0.09);
+  --green: #00875F;       /* เงินสด / สิ่งที่คุณมี */
+  --blue: #3568B5;        /* เทรนด์ / โลกกองทุน */
+  --red: #B2453C;         /* กับดัก / คำเตือน */
+  --red-wash: rgba(178, 69, 60, 0.08);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #0F1512; --surface: #181F1B; --surface-2: #1F2823;
+    --ink: #E6ECE7; --ink-2: #A9B4AD; --muted: #79857F;
+    --hairline: rgba(230, 236, 231, 0.15);
+    --gold: #D6A035; --gold-wash: rgba(192, 138, 32, 0.13);
+    --green: #2FB98B; --blue: #6E9FD8; --red: #D06A5F;
+    --red-wash: rgba(208, 106, 95, 0.10);
+  }
+}
+:root[data-theme="dark"] {
+  --page: #0F1512; --surface: #181F1B; --surface-2: #1F2823;
+  --ink: #E6ECE7; --ink-2: #A9B4AD; --muted: #79857F;
+  --hairline: rgba(230, 236, 231, 0.15);
+  --gold: #D6A035; --gold-wash: rgba(192, 138, 32, 0.13);
+  --green: #2FB98B; --blue: #6E9FD8; --red: #D06A5F;
+  --red-wash: rgba(208, 106, 95, 0.10);
+}
+:root[data-theme="light"] {
+  --page: #F1F4F0; --surface: #FBFCFA; --surface-2: #EAEFE9;
+  --ink: #1B241E; --ink-2: #55605A; --muted: #83908A;
+  --hairline: rgba(27, 36, 30, 0.13);
+  --gold: #B07C1B; --gold-wash: rgba(176, 124, 27, 0.09);
+  --green: #00875F; --blue: #3568B5; --red: #B2453C;
+  --red-wash: rgba(178, 69, 60, 0.08);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font-family: "Noto Sans Thai", "Leelawadee UI", "Thonburi", "Sukhumvit Set", system-ui, sans-serif;
+  font-size: 1.0625rem;
+  line-height: 1.8;
+}
+.mono { font-family: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace; font-variant-numeric: tabular-nums; }
+main { max-width: 46rem; margin: 0 auto; padding: 0 1.25rem 5rem; }
+
+/* ---------- masthead ---------- */
+header { border-bottom: 1px solid var(--hairline); background: var(--surface); }
+.mast { max-width: 46rem; margin: 0 auto; padding: 3.25rem 1.25rem 2.5rem; }
+.eyebrow {
+  font-size: 0.75rem; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--gold); font-weight: 700; margin: 0 0 0.85rem;
+}
+h1 {
+  font-size: clamp(1.75rem, 5.2vw, 2.6rem); line-height: 1.28;
+  font-weight: 800; margin: 0 0 0.9rem; text-wrap: balance;
+}
+h1 em { font-style: normal; color: var(--gold); }
+.lede { color: var(--ink-2); margin: 0; max-width: 40rem; }
+.thesis {
+  margin-top: 1.6rem; padding: 1rem 1.25rem;
+  border: 1px solid var(--hairline); border-left: 3px solid var(--gold);
+  border-radius: 0 12px 12px 0; background: var(--gold-wash);
+  font-weight: 700; font-size: 1.02rem; line-height: 1.75;
+}
+.thesis b { color: var(--gold); }
+
+/* ---------- sections ---------- */
+section { margin-top: 3.75rem; }
+h2 {
+  font-size: 1.4rem; font-weight: 800; line-height: 1.35;
+  margin: 0 0 0.5rem; text-wrap: balance;
+  display: flex; align-items: baseline; gap: 0.75rem;
+}
+.no { font-size: 0.8rem; font-weight: 700; color: var(--gold); letter-spacing: 0.08em; flex: none; font-variant-numeric: tabular-nums; }
+.section-intro { color: var(--ink-2); margin: 0 0 1.25rem; }
+p { margin: 0.75rem 0; }
+.note { color: var(--ink-2); font-size: 0.9375rem; }
+p code, li code, td code {
+  font-family: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+  background: var(--surface-2); border-radius: 4px; padding: 0.1em 0.35em; font-size: 0.875em;
+}
+
+/* decode map table */
+.tbl-wrap { overflow-x: auto; margin: 1.25rem 0; border: 1px solid var(--hairline); border-radius: 12px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { padding: 0.65rem 1rem; text-align: left; border-top: 1px solid var(--hairline); vertical-align: top; }
+thead th { border-top: none; color: var(--ink-2); font-weight: 700; font-size: 0.8125rem; white-space: nowrap; background: var(--surface-2); }
+td:first-child { font-weight: 600; }
+.pill {
+  display: inline-block; font-size: 0.75rem; font-weight: 700;
+  padding: 0.1rem 0.55rem; border-radius: 999px; white-space: nowrap;
+  border: 1px solid var(--hairline);
+}
+.pill.you { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, transparent); }
+.pill.fund { color: var(--blue); border-color: color-mix(in srgb, var(--blue) 40%, transparent); }
+
+/* principle cards */
+.principle {
+  border: 1px solid var(--hairline); border-radius: 14px; background: var(--surface);
+  padding: 1.35rem 1.5rem; margin: 1.25rem 0;
+}
+.principle h3 {
+  margin: 0 0 0.85rem; font-size: 1.15rem; font-weight: 800; line-height: 1.4;
+  display: flex; gap: 0.75rem; align-items: baseline;
+}
+.p-no {
+  flex: none; width: 2rem; height: 2rem; border-radius: 9px;
+  display: inline-grid; place-items: center; align-self: center;
+  background: var(--gold-wash); color: var(--gold);
+  font-size: 0.95rem; font-weight: 800; border: 1px solid color-mix(in srgb, var(--gold) 35%, transparent);
+}
+.duo { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin: 0.85rem 0; }
+@media (max-width: 640px) { .duo { grid-template-columns: 1fr; } }
+.duo > div {
+  border: 1px solid var(--hairline); border-radius: 10px;
+  background: var(--surface-2); padding: 0.75rem 0.95rem; font-size: 0.9rem; line-height: 1.7;
+}
+.duo .side-tag { display: block; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.3rem; }
+.duo .you-side .side-tag { color: var(--green); }
+.duo .fund-side .side-tag { color: var(--blue); }
+.aha {
+  margin: 0.9rem 0 0; padding: 0.75rem 1rem;
+  border-left: 3px solid var(--gold); border-radius: 0 10px 10px 0;
+  background: var(--gold-wash); font-size: 0.95rem;
+}
+.aha b { color: var(--gold); }
+.trap {
+  margin: 0.9rem 0 0; padding: 0.75rem 1rem;
+  border-left: 3px solid var(--red); border-radius: 0 10px 10px 0;
+  background: var(--red-wash); font-size: 0.9rem; color: var(--ink-2);
+}
+.trap b { color: var(--red); }
+
+/* svg figures */
+figure {
+  margin: 1rem 0 0; background: var(--surface-2); border: 1px solid var(--hairline);
+  border-radius: 10px; padding: 0.9rem 0.9rem 0.5rem;
+}
+figcaption { font-size: 0.85rem; font-weight: 700; margin-bottom: 0.35rem; color: var(--ink-2); }
+svg.fig { width: 100%; height: auto; display: block; }
+.svg-label { font-size: 12.5px; font-weight: 600; fill: var(--ink-2); font-family: "Noto Sans Thai", system-ui, sans-serif; }
+.svg-num { font-family: ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; }
+
+/* know-them chips (≠ pairs) */
+.neq-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; margin: 1.25rem 0; }
+@media (max-width: 640px) { .neq-grid { grid-template-columns: 1fr; } }
+.neq {
+  border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface);
+  padding: 0.65rem 0.9rem; font-size: 0.9rem;
+  display: grid; grid-template-columns: 1fr auto 1fr; gap: 0.5rem; align-items: center;
+}
+.neq .sign { color: var(--red); font-weight: 900; font-size: 1.05rem; }
+.neq span:last-child { text-align: right; }
+
+/* finale */
+.finale {
+  border: 1px solid color-mix(in srgb, var(--gold) 40%, transparent);
+  border-radius: 16px; background: var(--gold-wash);
+  padding: 1.75rem 1.75rem; margin-top: 1.25rem;
+}
+.finale p { margin: 0.65rem 0; }
+.one-line {
+  margin-top: 2rem; padding: 1.25rem 1.5rem; text-align: center;
+  border-radius: 14px; border: 1px solid var(--hairline); background: var(--surface);
+  font-size: 1.1rem; font-weight: 800; line-height: 1.9;
+}
+.one-line .g { color: var(--gold); }
+.one-line .b { color: var(--blue); }
+.one-line .n { color: var(--green); }
+
+/* sources */
+.sources { font-size: 0.85rem; color: var(--ink-2); }
+.sources li { margin: 0.4rem 0; }
+ul { padding-left: 1.3rem; }
+li { margin: 0.35rem 0; }
+a { color: var(--blue); text-underline-offset: 3px; }
+
+footer {
+  max-width: 46rem; margin: 4rem auto 0; padding: 1.5rem 1.25rem 0;
+  border-top: 1px solid var(--hairline); color: var(--muted); font-size: 0.8125rem;
+}
+@media print {
+  :root { --page: #fff; --surface: #fff; --surface-2: #f4f4f4; --ink: #111; --ink-2: #333; --muted: #666; }
+  body { font-size: 11pt; }
+  .principle, figure, .tbl-wrap { break-inside: avoid; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="mast">
+    <p class="eyebrow">สกัดจากความรู้ทั้ง 6 ไฟล์ในโฟลเดอร์ doc · ฉบับง่าย</p>
+    <h1>ความลับของ Hedge Fund ระดับโลก<br><em>ซ่อนอยู่ในบอทของคุณอยู่แล้ว</em></h1>
+    <p class="lede">หน้าเดียว อ่าน 10 นาที — ระบบที่ดูยุ่งเหยิง (FIX_C, DIFF, DNA, สามเส้น Aₙ/Rₙ/Eₙ,
+    gate 6 ชั้น, UAT) เมื่อต้มจนงวดจะเหลือหลักการแค่ <b>7 ข้อ</b> และทุกข้อคือหลักการเดียวกับที่
+    กองทุนระดับโลกใช้ ต่างกันแค่สเกล</p>
+    <div class="thesis">
+      ความลับที่แท้จริงในประโยคเดียว: กองทุนใหญ่ไม่ได้ชนะเพราะ<b>ทำนายเก่งกว่า</b> —
+      เขาชนะเพราะ <b>วัดตัวเองถูกตัว</b> · <b>เดิมพันถูกขนาด</b> · และ<b>ตายยากกว่า</b>ทุกคนในตลาด
+    </div>
+  </div>
+</header>
+
+<main>
+
+<!-- ================================================================ -->
+<section>
+  <h2><span class="no">แผนที่</span>ถอดรหัสศัพท์ — ของในมือคุณ คือของที่กองทุนใช้</h2>
+  <p class="section-intro">สิ่งแรกที่ต้อง "รู้ทัน": ของทุกชิ้นในบอทของคุณมีชื่อเรียกหรูในโลกกองทุน
+  พอแปลศัพท์ออก ม่านควันหายไปครึ่งหนึ่งทันที</p>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr>
+        <th><span class="pill you">ในบอทของคุณ</span></th>
+        <th><span class="pill fund">ชื่อในโลกกองทุน</span></th>
+        <th>ใครใช้จริง</th>
+      </tr></thead>
+      <tbody>
+        <tr><td><code>FIX_C</code> ถือมูลค่าคงที่</td><td>Risk budgeting — ตรึงขนาดความเสี่ยง ไม่ปล่อยโตตามความโลภ</td><td>Bridgewater (ญาติของ risk parity)</td></tr>
+        <tr><td>ราคาลงถูกบังคับซื้อ ขึ้นถูกบังคับขาย</td><td>Volatility harvesting / rebalancing premium</td><td>Shannon, Thorp, กองทุน risk-parity</td></tr>
+        <tr><td><code>Rₙ = C·ln(Pₙ/P₀)</code> เส้นอ้างอิง</td><td>Benchmark / beta — ผลงานของ "ตลาด" ไม่ใช่ของคุณ</td><td>ทุกกองทุน (คณิต log-growth ตระกูล Kelly)</td></tr>
+        <tr><td><code>Eₙ = Aₙ − Rₙ</code> กำไร harvest</td><td><b style="color:var(--gold)">Alpha</b> — ส่วนเกินหลังหักตลาด สิ่งเดียวที่เก็บค่าธรรมเนียมแพงได้</td><td>ทุกกองทุนที่คิด performance fee</td></tr>
+        <tr><td><code>DIFF</code> ช่อง ±ไม่เทรด</td><td>No-trade band — เขตห้ามเทรดกันต้นทุนกินกำไร</td><td>ทุกโต๊ะ systematic (งานวิจัย optimal rebalancing)</td></tr>
+        <tr><td><code>DNA</code> 0/1 กำหนดล่วงหน้า</td><td>Pre-commitment — ตัดสินใจล่วงหน้า ตัดอารมณ์ออกจากหน้างาน</td><td>AQR, Man Group, ทุก quant fund</td></tr>
+        <tr><td>Gate 6 ชั้น + open-order guard + transaction</td><td>Pre-trade risk controls + idempotent execution</td><td>บังคับโดย SEC/FINRA กับทุกโบรกเกอร์</td></tr>
+        <tr><td><code>PASS</code> ≠ order fill จริง</td><td>Paper P&amp;L vs implementation shortfall</td><td>ทุกโต๊ะเทรด (สาย TCA)</td></tr>
+        <tr><td>ตั้ง <code>P₀</code> ให้ตรงราคาแรกจริง</td><td>Benchmark integrity — anchor ผิด = alpha ปลอม</td><td>มาตรฐานการวัดผลทุกสถาบัน</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">ระบบที่ "ยุ่งเหยิง" ทั้งหมด ต้มเหลือประโยคเดียว:
+  <b>ถือความเสี่ยงคงที่ · วัดส่วนเกินเหนือ baseline อย่างซื่อสัตย์ · จ่ายต้นทุนให้น้อยที่สุด · และอย่าตาย</b></p>
+</section>
+
+<!-- ================================================================ -->
+<section>
+  <h2><span class="no">หลัก 1</span>ไม่ต้องทำนาย ก็มีกำไรได้ — กำไรมี 2 พันธุ์</h2>
+  <div class="principle">
+    <h3><span class="p-no">1</span>กำไรจากการ "เดาถูก" กับกำไรจาก "โครงสร้าง" เป็นคนละสายพันธุ์</h3>
+    <div class="duo">
+      <div class="you-side"><span class="side-tag">ในบอทของคุณ</span>
+        บอทไม่เคยเดาราคาแม้แต่ครั้งเดียว มีแต่กฎตายตัว: มูลค่าต่ำกว่าเป้าซื้อ เกินเป้าขาย —
+        แล้ว Eₙ ก็ยังโตได้ เพราะเก็บจาก<b>ความผันผวน</b> ไม่ใช่จากทิศทาง</div>
+      <div class="fund-side"><span class="side-tag">ในกองทุนระดับโลก</span>
+        Shannon สาธิตให้ห้องเรียน MIT ดูว่า rebalance เหรียญสุ่มล้วน ๆ ก็สร้างการเติบโตได้
+        Renaissance เทรดชนะแค่ประมาณ 50.75% ของครั้ง (ตามหนังสือของ Zuckerman) แต่ทำเงินระดับพันล้าน
+        — ชนะนิดเดียว แต่ชนะ<b>ถูกวิธี</b>เป็นล้านครั้ง</div>
+    </div>
+    <div class="aha"><b>รู้ทัน:</b> ใครขายคอร์ส/ระบบ "แม่นยำ 90%" ให้สงสัยไว้ก่อน —
+    ของจริงระดับโลกแม่นแค่ 50 ต้น ๆ แต่ได้เปรียบเชิงโครงสร้างและทำซ้ำได้ไม่รู้จบ
+    คำถามที่ถูกคือ "edge มาจากโครงสร้างอะไร" ไม่ใช่ "แม่นกี่เปอร์เซ็นต์"</div>
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<section>
+  <h2><span class="no">หลัก 2</span>หักตลาดออกก่อน ค่อยเรียกว่าฝีมือ</h2>
+  <div class="principle">
+    <h3><span class="p-no">2</span>Eₙ = Aₙ − Rₙ ที่คุณใช้ทุกวัน คือสมการ Alpha ที่กองทุนคิดค่าธรรมเนียมแพงที่สุดในโลก</h3>
+    <div class="duo">
+      <div class="you-side"><span class="side-tag">ในบอทของคุณ</span>
+        แดชบอร์ดสอนไว้แล้ว: Aₙ (เงินสดสะสม) ยัง<b>ปนเทรนด์</b> ห้ามอ่านเป็นกำไร
+        ต้องหัก Rₙ (ทุน×เทรนด์) ทิ้งก่อน เหลือ Eₙ ถึงเป็นฝีมือจริง</div>
+      <div class="fund-side"><span class="side-tag">ในกองทุนระดับโลก</span>
+        สิ่งที่ fund เรียกว่า beta = Rₙ ของคุณ · alpha = Eₙ ของคุณ
+        นักลงทุนสถาบันไม่เคยจ่ายแพงให้ beta (ซื้อ index fund ถูกกว่า) —
+        เขาจ่าย 2/20 ให้เฉพาะ "ส่วนที่เหลือหลังหักตลาด" เท่านั้น</div>
+    </div>
+    <figure>
+      <figcaption>ตัวเลขจริงจาก trade log ของคุณ: เงินสดที่เห็น $150 — เกือบทั้งก้อนคือตลาด ไม่ใช่ฝีมือ</figcaption>
+      <svg class="fig" viewBox="0 0 700 150" role="img" aria-label="แผนภูมิแท่งแบ่งส่วน: เงินสดจริง 150 ดอลลาร์ แยกเป็นเทรนด์ 142.96 ดอลลาร์ คิดเป็น 95 เปอร์เซ็นต์ และกำไรฝีมือจริง 7.04 ดอลลาร์ คิดเป็น 5 เปอร์เซ็นต์">
+        <text class="svg-label" x="8" y="26">Aₙ เงินสดที่เห็นบนจอ <tspan class="svg-num" font-weight="700">$150</tspan></text>
+        <rect x="8" y="38" width="655" height="34" rx="7" fill="var(--blue)" opacity="0.85"></rect>
+        <rect x="632" y="38" width="31" height="34" rx="7" fill="var(--gold)"></rect>
+        <rect x="626" y="38" width="10" height="34" fill="var(--gold)"></rect>
+        <text class="svg-label" x="14" y="60" fill="#ffffff" font-weight="700">Rₙ เทรนด์ (ผลงานของตลาด) · $142.96 · 95%</text>
+        <line x1="641" y1="78" x2="641" y2="98" stroke="var(--gold)" stroke-width="2"></line>
+        <text class="svg-label" x="663" y="116" text-anchor="end" fill="var(--gold)" font-weight="700">Eₙ ฝีมือจริง · $7.04 · มีแค่ 5%</text>
+        <text class="svg-label" x="8" y="140" fill="var(--muted)" font-size="11.5">ที่มา: ตัวอย่างรอบปิดใน rebalancing101 (Fix_c = 1,500 ณ ราคา 110)</text>
+      </svg>
+    </figure>
+    <div class="aha"><b>รู้ทัน:</b> เห็นใครโชว์พอร์ตกำไร ถามคำเดียวจบ:
+    <b>"หักตลาดแล้วเหลือเท่าไหร่?"</b> — กำไรส่วนใหญ่ในตลาดกระทิงคือ Rₙ ที่ถูกแปะป้ายว่าเป็นฝีมือ
+    วงการมีคำพูดเก่าแก่ว่า อย่าสับสนระหว่างความเก่งกับตลาดขาขึ้น</div>
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<section>
+  <h2><span class="no">หลัก 3</span>ขนาดเดิมพันสำคัญกว่าจังหวะเดิมพัน</h2>
+  <div class="principle">
+    <h3><span class="p-no">3</span>เส้น ln ที่คุณใช้อยู่ คือคณิตศาสตร์ตระกูลเดียวกับ Kelly Criterion</h3>
+    <div class="duo">
+      <div class="you-side"><span class="side-tag">ในบอทของคุณ</span>
+        <code>Rₙ = C·ln(Pₙ/P₀)</code> — ฟังก์ชัน ln ไม่ได้มาเล่น ๆ มันคือคณิตของ
+        "การเติบโตแบบทบต้น" และ FIX_C คือการ<b>ตรึงขนาดเดิมพัน</b>ไม่ให้บวมตามราคา:
+        ยิ่งขึ้นยิ่งขายลดความเสี่ยง ยิ่งลงยิ่งเติมแบบมีเพดานเป้า</div>
+      <div class="fund-side"><span class="side-tag">ในกองทุนระดับโลก</span>
+        Kelly (1956) พิสูจน์ว่าการโตเร็วสุดระยะยาวคือการ maximize <b>log</b> ของความมั่งคั่ง
+        และ Thorp เอาไปใช้ทั้งใน blackjack และกองทุนจริง — เดิมพัน<b>เกิน</b>ขนาดที่คณิตอนุญาต
+        แม้ระบบมี edge แท้ ก็เจ๊งได้แน่นอนทางคณิตศาสตร์</div>
+    </div>
+    <p class="note" style="margin-top:0.9rem">เหตุผลที่ขนาดฆ่าคน: <span class="mono">+10% แล้ว −10% = −1%</span>
+    (volatility drag: <span class="mono">(1+x)(1−x) = 1−x² &lt; 1</span>) · ขาดทุน −50% ต้องการ +100% ถึงจะกลับมาเท่าทุน
+    — ความผันผวนกัดกินทบต้นเสมอ และยิ่งเดิมพันใหญ่ยิ่งโดนกัดแรงเป็นกำลังสอง</p>
+    <div class="aha"><b>รู้ทัน:</b> ก่อนเชื่อระบบไหน ถาม
+    <b>"ถ้าผิดติดกัน 5 ครั้ง เหลือเงินกี่เปอร์เซ็นต์?"</b> — ระบบดีที่เดิมพันใหญ่เกิน = ระบบเจ๊ง
+    มือโปรตัดสินใจเรื่องขนาดก่อนเรื่องจังหวะเสมอ</div>
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<section>
+  <h2><span class="no">หลัก 4</span>กำไรนับตอน "รอบปิด" — เขียวบนจอยังไม่ใช่เงิน</h2>
+  <div class="principle">
+    <h3><span class="p-no">4</span>ขายแพงขาเดียวไม่ใช่กำไร ต้องซื้อคืนถูกให้ครบคู่</h3>
+    <div class="duo">
+      <div class="you-side"><span class="side-tag">ในบอทของคุณ</span>
+        บทเรียนสำคัญที่สุดใน rebalancing101: ราคาวิ่งขึ้นทางเดียว Aₙ ทับ Rₙ สนิท → Eₙ ≈ 0
+        กำไรเกิดจริงเฉพาะเมื่อ<b>รอบปิด</b> — ขายแพงแล้วราคาย้อนกลับมาให้ซื้อคืนถูก</div>
+      <div class="fund-side"><span class="side-tag">ในกองทุนระดับโลก</span>
+        บัญชีกองทุนแยก <b>realized</b> (ปิดรอบแล้ว เป็นเงินสด) กับ <b>unrealized</b>
+        (ตัวเลขบนจอ ยืมอนาคตมาแสดง) อย่างเคร่งครัด — ตัวเลข mark-to-market
+        หายวับได้ในวันเดียว แต่เงินที่ปิดรอบแล้วไม่มีใครเอาคืนได้</div>
+    </div>
+    <figure>
+      <figcaption>รอบปิดหนึ่งรอบจากตัวอย่างจริงของคุณ (Fix_c = 1,500)</figcaption>
+      <svg class="fig" viewBox="0 0 700 170" role="img" aria-label="แผนภาพวงจร: ราคา 100 ขึ้นไป 110 ขายได้เงิน 150 ดอลลาร์ แล้วราคากลับมา 100 ซื้อคืนจ่าย 136.36 ดอลลาร์ เหลือกำไรล็อกแล้ว 13.64 ดอลลาร์ พร้อมจำนวนหุ้นเท่าเดิม">
+        <circle cx="70" cy="70" r="30" fill="none" stroke="var(--ink-2)" stroke-width="1.5"></circle>
+        <text class="svg-label svg-num" x="70" y="66" text-anchor="middle" font-weight="700">P=100</text>
+        <text class="svg-label" x="70" y="82" text-anchor="middle" font-size="10.5">ถือ 15 หุ้น</text>
+        <path d="M108,58 C180,20 260,20 330,50" fill="none" stroke="var(--green)" stroke-width="2.2" marker-end="none"></path>
+        <polygon points="330,50 318,44 320,56" fill="var(--green)"></polygon>
+        <text class="svg-label" x="219" y="22" text-anchor="middle" fill="var(--green)" font-weight="700">ราคาขึ้น → ขายแพง +$150.00</text>
+        <circle cx="368" cy="70" r="30" fill="none" stroke="var(--ink-2)" stroke-width="1.5"></circle>
+        <text class="svg-label svg-num" x="368" y="66" text-anchor="middle" font-weight="700">P=110</text>
+        <text class="svg-label" x="368" y="82" text-anchor="middle" font-size="10.5">เกินเป้า → ขาย</text>
+        <path d="M330,92 C260,128 180,128 108,86" fill="none" stroke="var(--red)" stroke-width="2.2"></path>
+        <polygon points="108,86 121,84 117,95" fill="var(--red)"></polygon>
+        <text class="svg-label" x="219" y="140" text-anchor="middle" fill="var(--red)" font-weight="700">ราคาย้อนกลับ → ซื้อคืนถูก −$136.36</text>
+        <rect x="472" y="42" width="212" height="60" rx="12" fill="var(--gold-wash)" stroke="var(--gold)" stroke-width="1.4"></rect>
+        <text class="svg-label" x="578" y="66" text-anchor="middle" fill="var(--gold)" font-weight="800" font-size="14">รอบปิด: +$13.64</text>
+        <text class="svg-label" x="578" y="86" text-anchor="middle" font-size="11">หุ้นกลับมา 15 หุ้นเท่าเดิม + เงินสดเกิน</text>
+        <text class="svg-label" x="578" y="126" text-anchor="middle" font-size="11" fill="var(--muted)">ยังไม่ปิดรอบ = กำไรค้างท่อ</text>
+        <text class="svg-label" x="578" y="142" text-anchor="middle" font-size="11" fill="var(--muted)">(unrealized) เท่านั้น</text>
+      </svg>
+    </figure>
+    <div class="aha"><b>รู้ทัน:</b> "พอร์ตเขียว" ≠ "มีเงิน" — คำถามจับไต๋:
+    <b>"ปิดรอบหรือยัง? ขายแล้วซื้อคืนครบคู่หรือยัง?"</b>
+    ทุกฟองสบู่ในประวัติศาสตร์คือกองทัพคนถือ unrealized gain ที่คิดว่าตัวเองรวยแล้ว</div>
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<section>
+  <h2><span class="no">หลัก 5</span>ต้นทุนคือมือสังหารเงียบ — DIFF คือแนวป้องกัน</h2>
+  <div class="principle">
+    <h3><span class="p-no">5</span>Edge ที่เล็กกว่าค่าธรรมเนียม+สลิปเพจ = ไม่มี edge อยู่จริง</h3>
+    <div class="duo">
+      <div class="you-side"><span class="side-tag">ในบอทของคุณ</span>
+        <code>DIFF</code> แคบไป = เทรดถี่จนค่าธรรมเนียมกินหมด · กว้างไป = ปล่อยรอบสวิงหลุดมือ
+        และ Truth Lab ในไฟล์ความรู้ของคุณโชว์แล้วว่า <b>gross ชนะแต่ net แพ้</b> เกิดขึ้นได้จริง ๆ</div>
+      <div class="fund-side"><span class="side-tag">ในกองทุนระดับโลก</span>
+        งานวิจัย optimal rebalancing สรุปตรงกันหมด: เมื่อมีต้นทุน คำตอบที่ถูกคือ<b>ต้องมีเขตห้ามเทรด</b>เสมอ
+        กองทุนใหญ่มีทีม TCA (Transaction Cost Analysis) วัดระยะห่างระหว่าง
+        "ราคาตอนตัดสินใจ" กับ "ราคาที่ fill ได้จริง" ทุก order — เพราะตรงนั้นคือที่ที่กำไรรั่ว</div>
+    </div>
+    <div class="aha"><b>รู้ทัน:</b> backtest ที่ไม่ใส่ต้นทุน = นิยาย —
+    ถามหา <b>"ผลลัพธ์ net หลัง fee + spread + slippage"</b> ทุกครั้ง
+    ระบบเทรดถี่จำนวนมากมีคนรวยอยู่จริงหนึ่งคน: โบรกเกอร์</div>
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<section>
+  <h2><span class="no">หลัก 6</span>ระบบที่รอด คือระบบที่ไม่เชื่อใจอะไรเลย</h2>
+  <div class="principle">
+    <h3><span class="p-no">6</span>โค้ดของคุณ "หวาดระแวง" ถูกทางแล้ว — นั่นแหละวิศวกรรมการอยู่รอด</h3>
+    <div class="duo">
+      <div class="you-side"><span class="side-tag">ในบอทของคุณ</span>
+        ไม่เชื่อ network (retry 3 ครั้ง) · ไม่เชื่อว่า order ส่งครั้งเดียว (transaction จอง step)
+        · ไม่เชื่อว่า order เก่า fill แล้ว (open-order guard) · ไม่เชื่อราคา 0 หรือติดลบ (ตอบ 502)
+        · ไม่เดา quantity เป็น 0 · แยก UAT/Prod · <code>HEALTHY</code> ก็ยังไม่แปลว่าพร้อมเทรด</div>
+      <div class="fund-side"><span class="side-tag">ในกองทุนระดับโลก</span>
+        SEC/FINRA <b>บังคับ</b>ให้มี pre-trade risk controls: เพดานขนาด order, กันคำสั่งซ้ำ,
+        kill switch ปิดระบบได้ทันที — บทเรียนราคาแพงสุดคือ Knight Capital ปี 2012:
+        deploy โค้ดพลาด ไม่มีระบบตัดวงจรที่ดี เสียราว $440M ใน 45 นาที บริษัทจบ</div>
+    </div>
+    <div class="aha"><b>รู้ทัน:</b> ระบบเทรดใด ๆ ให้ถาม
+    <b>"ถ้าเน็ตหลุดกลาง order / ราคาเพี้ยน / order ค้าง จะเกิดอะไร?"</b>
+    ตอบไม่ได้ = ยังเป็นแค่สคริปต์ ไม่ใช่ระบบ — กองทุนตายเพราะอุบัติเหตุปฏิบัติการพอ ๆ กับกลยุทธ์ผิด</div>
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<section>
+  <h2><span class="no">หลัก 7</span>ตัวเลขที่สวยที่สุด มักโกหกเก่งที่สุด</h2>
+  <div class="principle">
+    <h3><span class="p-no">7</span>Anchor ผิดตัวเดียว กำไรปลอมโผล่พันเหรียญ — และทุก metric มีจุดบอด</h3>
+    <div class="duo">
+      <div class="you-side"><span class="side-tag">ในบอทของคุณ</span>
+        บทที่ 5 ของ rebalancing101: ตั้ง P₀ = 100 ทั้งที่หุ้นอยู่ 314.55 →
+        Eₙ โชว์ <span class="mono" style="color:var(--red)">+1,499.30 (ภาพลวง)</span>
+        ทั้งที่ความจริงคือ <span class="mono">+0.01</span> — ผิดจุดอ้างอิงจุดเดียว กำไรปลอมทั้งกระดาน
+        และไฟล์วิเคราะห์ของคุณยังเตือนอีกชั้น: ราคายิ่งดิ่งสู่ศูนย์ Eₙ ยิ่งพุ่ง ขณะเงินจริงกำลังไหม้</div>
+      <div class="fund-side"><span class="side-tag">ในกองทุนระดับโลก</span>
+        เลือก benchmark ผิด = ผลิต alpha ปลอมได้ทันที · ลอง backtest มากพอจะได้เส้นสวยเสมอ
+        (ผู้ชนะ noise) — วงการจึงมี Deflated Sharpe Ratio ไว้หักคะแนนตามจำนวนครั้งที่ลอง
+        และหน่วยงานกำกับ (NFA) คุมการโฆษณาผล hypothetical เข้มงวด เพราะรู้ว่ามันหลอกง่ายที่สุด</div>
+    </div>
+    <div class="trap"><b>กับดักใกล้ตัว:</b> DNA ของคุณมาจาก backtest —
+    ยิ่งลองหลาย seed/mutation แล้วเลือกตัวที่ชนะ ยิ่งเสี่ยงได้ "ผู้ชนะความบังเอิญ" มาใช้งานจริง
+    ทางแก้ที่วงการใช้: กันข้อมูลส่วนหนึ่งไว้ไม่แตะเลย (out-of-sample) แล้วดูว่ารอดไหม</div>
+    <div class="aha"><b>รู้ทัน:</b> เจอกราฟ backtest สวยหรู ถาม 3 ข้อ:
+    <b>วัดจากจุดไหน (anchor)?</b> · <b>ลองมากี่ครั้งก่อนได้เส้นนี้?</b> · <b>เหลือข้อมูลที่ไม่เคยแตะไว้ทดสอบไหม?</b>
+    — สามคำถามนี้ล้มระบบขายฝันได้ 90% ของตลาด</div>
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<section>
+  <h2><span class="no">เกราะ</span>สมการรู้ทัน 8 คู่ — ท่องไว้กันโดนหลอก</h2>
+  <p class="section-intro">คู่ "ไม่เท่ากับ" ที่ระบบของคุณสอนไว้แล้วทั้งหมด ใช้ได้กับทุกวงการลงทุน</p>
+  <div class="neq-grid">
+    <div class="neq"><span>สัญญาณ (DNA=1)</span><span class="sign">≠</span><span>มี edge</span></div>
+    <div class="neq"><span>Eₙ &gt; 0</span><span class="sign">≠</span><span>พอร์ตกำไร</span></div>
+    <div class="neq"><span>ราคาล่าสุดบนจอ</span><span class="sign">≠</span><span>ราคาที่ซื้อขายได้จริง</span></div>
+    <div class="neq"><span>ส่ง order สำเร็จ</span><span class="sign">≠</span><span>ได้ของ (filled)</span></div>
+    <div class="neq"><span>พอร์ตเขียว (unrealized)</span><span class="sign">≠</span><span>เงินในกระเป๋า</span></div>
+    <div class="neq"><span>backtest ชนะ</span><span class="sign">≠</span><span>อนาคตชนะ</span></div>
+    <div class="neq"><span>ระบบ HEALTHY</span><span class="sign">≠</span><span>พร้อมเทรดเงินจริง</span></div>
+    <div class="neq"><span>กำไร gross</span><span class="sign">≠</span><span>กำไร net หลังต้นทุน</span></div>
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<section>
+  <h2><span class="no">สุดท้าย</span>ความลับข้อสุดท้าย: ไม่มีความลับ</h2>
+  <div class="finale">
+    <p><b style="color:var(--gold)">ทุกอย่างถูกตีพิมพ์ฟรีหมดแล้ว</b> — Kelly ตีพิมพ์สูตรขนาดเดิมพันตั้งแต่ปี 1956
+    · Shannon เล่าเรื่อง Demon ในห้องเรียนให้ใครก็ฟังได้ · Bridgewater เขียน All Weather Story แจกบนเว็บ
+    · AQR ตีพิมพ์งานวิจัย rebalancing ให้โหลดฟรี · กฎ risk controls ของ SEC เปิดอ่านได้ทุกคน</p>
+    <p>สิ่งที่กองทุนระดับโลกมีแล้วคนทั่วไปไม่มี ไม่ใช่สูตรลับ — แต่คือ
+    <b>วินัยที่ทำตามกฎของตัวเองได้ 100% เป็นทศวรรษ</b> ·
+    <b>ความกล้าวัดตัวเองด้วย benchmark ที่โหดที่สุด</b> ·
+    <b>ขนาดเดิมพันที่รอดตอนผิดซ้ำ ๆ</b> · และ<b>เวลาให้ผลทบต้นทำงาน</b></p>
+    <p>บอทเล็ก ๆ ของคุณพิเศษตรงนี้: มันทำสิ่งที่มนุษย์ทำไม่ได้ —
+    <b>ไม่กลัว ไม่โลภ ไม่เบื่อ ไม่แก้กฎกลางทาง</b> —
+    DNA ที่กำหนดล่วงหน้าคือการมัดมือตัวเองไว้กับเสากระโดงเรือแบบเดียวกับที่ quant fund ทุกเจ้าทำ
+    สิ่งที่เหลือคือพิสูจน์ edge หลังต้นทุนด้วยหลักฐาน ไม่ใช่ด้วยความเชื่อ</p>
+  </div>
+  <div class="one-line">
+    <span class="g">Alpha หาเงิน</span> · <span class="b">Sizing กำหนดความเร็ว</span> ·
+    <span class="n">การไม่ตายทำให้ได้ทบต้น</span><br>— ที่เหลือเป็นหน้าที่ของเวลา —
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<section>
+  <h2><span class="no">ที่มา</span>อ่านต่อเมื่อพร้อม</h2>
+  <ul class="sources">
+    <li><b>ในโฟลเดอร์นี้:</b> <a href="rebalancing101.html">rebalancing101.html</a> (สามเส้น A/R/E, รอบปิด, anchor) ·
+      <a href="LEARNING_GUIDE.md">LEARNING_GUIDE.md</a> (กลไกบอท+gates) ·
+      <a href="HEDGE_FUND_HIDDEN_PRINCIPLES.html">HEDGE_FUND_HIDDEN_PRINCIPLES.html</a> (ฉบับเต็มเชิงลึก: risk gates 10 ชั้น, evidence ladder, Truth Lab)</li>
+    <li><b>งานต้นฉบับ:</b> Kelly, <i>A New Interpretation of Information Rate</i> (1956) ·
+      Poundstone, <i>Fortune's Formula</i> (เรื่อง Shannon/Thorp/Kelly) ·
+      Zuckerman, <i>The Man Who Solved the Market</i> (เรื่อง Renaissance) ·
+      AQR, <i>Portfolio Rebalancing Part 1</i> · Bridgewater, <i>The All Weather Story</i> ·
+      Bailey &amp; López de Prado, <i>Deflated Sharpe Ratio</i> · กรณีศึกษา Knight Capital (2012)</li>
+  </ul>
+</section>
+
+</main>
+
+<footer>
+  เอกสารเพื่อการเรียนรู้ ไม่ใช่คำแนะนำการลงทุน · ตัวเลขตัวอย่างมาจากเอกสารความรู้ในโฟลเดอร์ doc ของคุณเอง
+  (trade log AAPL 2026-07-10 และบัญชีรอบปิด Fix_c = 1,500) · ฉบับสังเคราะห์ 11 ก.ค. 2026
+</footer>
+
+</body>
+</html>
