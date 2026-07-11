@@ -1,0 +1,698 @@
+<title>Rebalancing 101 — Shannon Demon Quick Start</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root {
+  --page: #F1F4F0;
+  --surface: #FBFCFA;
+  --ink: #1B241E;
+  --ink-2: #55605A;
+  --muted: #83908A;
+  --grid: #E2E7E1;
+  --hairline: rgba(27, 36, 30, 0.12);
+  --cash: #00875F;      /* Aₙ — เงินสดสะสม */
+  --ref: #3568B5;       /* Rₙ — เส้นอ้างอิง */
+  --harvest: #B07C1B;   /* Eₙ — กำไร harvest (พระเอก) */
+  --sell: #B2453C;      /* เครื่องหมายลบ ฝั่งขาย */
+  --code-bg: #EAEFE9;
+  --harvest-wash: rgba(176, 124, 27, 0.09);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #0F1512;
+    --surface: #181F1B;
+    --ink: #E6ECE7;
+    --ink-2: #A9B4AD;
+    --muted: #79857F;
+    --grid: #28322C;
+    --hairline: rgba(230, 236, 231, 0.14);
+    --cash: #169B72;
+    --ref: #4E86CB;
+    --harvest: #C08A20;
+    --sell: #D06A5F;
+    --code-bg: #1F2823;
+    --harvest-wash: rgba(192, 138, 32, 0.12);
+  }
+}
+:root[data-theme="dark"] {
+  --page: #0F1512; --surface: #181F1B; --ink: #E6ECE7; --ink-2: #A9B4AD;
+  --muted: #79857F; --grid: #28322C; --hairline: rgba(230,236,231,0.14);
+  --cash: #169B72; --ref: #4E86CB; --harvest: #C08A20; --sell: #D06A5F;
+  --code-bg: #1F2823; --harvest-wash: rgba(192,138,32,0.12);
+}
+:root[data-theme="light"] {
+  --page: #F1F4F0; --surface: #FBFCFA; --ink: #1B241E; --ink-2: #55605A;
+  --muted: #83908A; --grid: #E2E7E1; --hairline: rgba(27,36,30,0.12);
+  --cash: #00875F; --ref: #3568B5; --harvest: #B07C1B; --sell: #B2453C;
+  --code-bg: #EAEFE9; --harvest-wash: rgba(176,124,27,0.09);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font-family: "Noto Sans Thai", "Leelawadee UI", "Thonburi", "Sukhumvit Set", system-ui, sans-serif;
+  font-size: 1.0625rem;
+  line-height: 1.75;
+}
+.mono {
+  font-family: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+main { max-width: 42rem; margin: 0 auto; padding: 0 1.25rem 5rem; }
+.wide { max-width: 60rem; margin-left: auto; margin-right: auto; }
+
+/* ---------- masthead ---------- */
+header {
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface);
+}
+.mast { max-width: 42rem; margin: 0 auto; padding: 3rem 1.25rem 2.25rem; }
+.eyebrow {
+  font-size: 0.75rem; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--harvest); font-weight: 700; margin: 0 0 0.75rem;
+}
+h1 {
+  font-size: clamp(1.7rem, 5vw, 2.4rem); line-height: 1.25;
+  font-weight: 800; margin: 0 0 0.75rem; text-wrap: balance;
+}
+.lede { color: var(--ink-2); margin: 0; max-width: 36rem; }
+.formula-strip {
+  display: flex; flex-wrap: wrap; gap: 0.5rem 1.75rem;
+  margin-top: 1.5rem; font-size: 0.9rem;
+}
+.formula-strip span { white-space: nowrap; }
+.dot { display: inline-block; width: 0.6em; height: 0.6em; border-radius: 50%; margin-right: 0.45em; vertical-align: baseline; }
+
+/* ---------- sections ---------- */
+section { margin-top: 3.5rem; }
+h2 {
+  font-size: 1.35rem; font-weight: 800; line-height: 1.35;
+  margin: 0 0 1rem; text-wrap: balance;
+  display: flex; align-items: baseline; gap: 0.75rem;
+}
+.no {
+  font-size: 0.8rem; font-weight: 700; color: var(--harvest);
+  letter-spacing: 0.08em; flex: none;
+  font-variant-numeric: tabular-nums;
+}
+h3 { font-size: 1.05rem; font-weight: 700; margin: 1.75rem 0 0.5rem; }
+p { margin: 0.75rem 0; }
+.note { color: var(--ink-2); font-size: 0.9375rem; }
+
+pre {
+  background: var(--code-bg); border-radius: 8px;
+  padding: 1rem 1.25rem; overflow-x: auto;
+  font-size: 0.875rem; line-height: 1.7; margin: 1rem 0;
+}
+code { font-family: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace; }
+p code, li code, td code {
+  background: var(--code-bg); border-radius: 4px; padding: 0.1em 0.35em;
+  font-size: 0.875em;
+}
+
+/* three-line cards */
+.lines { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 0.75rem; margin: 1.25rem 0; }
+.line-card {
+  background: var(--surface); border: 1px solid var(--hairline);
+  border-radius: 10px; padding: 1rem 1.15rem;
+}
+.line-card .tag { font-size: 0.75rem; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 700; }
+.line-card .fx { display: block; margin: 0.5rem 0 0.4rem; font-size: 0.95rem; font-weight: 600; }
+.line-card p { margin: 0; font-size: 0.875rem; color: var(--ink-2); line-height: 1.65; }
+.line-card.hero-card { border-color: var(--harvest); background: var(--harvest-wash); }
+
+/* tables */
+.tbl-wrap { overflow-x: auto; margin: 1rem 0; border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 0.875rem; }
+caption {
+  text-align: left; padding: 0.85rem 1rem 0.15rem; font-weight: 700; font-size: 0.9375rem;
+}
+th, td { padding: 0.55rem 1rem; text-align: left; border-top: 1px solid var(--grid); }
+thead th { border-top: none; color: var(--ink-2); font-weight: 600; font-size: 0.8125rem; white-space: nowrap; }
+td.num, th.num { text-align: right; font-family: ui-monospace, "SF Mono", Consolas, monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pos { color: var(--cash); font-weight: 600; }
+.neg { color: var(--sell); font-weight: 600; }
+.hl td { background: var(--harvest-wash); }
+
+/* charts */
+.chart-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr)); gap: 1rem; margin: 1.25rem 0 0.5rem; }
+figure {
+  margin: 0; background: var(--surface); border: 1px solid var(--hairline);
+  border-radius: 10px; padding: 1rem 1rem 0.5rem; position: relative;
+}
+figcaption { font-size: 0.9375rem; font-weight: 700; margin-bottom: 0.25rem; }
+figcaption small { display: block; font-weight: 400; color: var(--ink-2); }
+.legend { display: flex; flex-wrap: wrap; gap: 0.35rem 1.1rem; font-size: 0.8125rem; color: var(--ink-2); margin: 1rem 0 0.5rem; }
+.legend b { color: var(--ink); font-weight: 600; }
+svg.chart { width: 100%; height: auto; display: block; touch-action: pan-y; }
+.gridline { stroke: var(--grid); stroke-width: 1; }
+.axisline { stroke: var(--hairline); stroke-width: 1; }
+.ticktext { fill: var(--muted); font-size: 11px; font-family: ui-monospace, Consolas, monospace; }
+.dlabel { font-size: 11.5px; font-weight: 600; fill: var(--ink-2); }
+.series { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.pt { stroke: var(--surface); stroke-width: 2; }
+.tip {
+  position: absolute; pointer-events: none; display: none;
+  background: var(--ink); color: var(--page);
+  font-size: 0.75rem; line-height: 1.5; border-radius: 6px;
+  padding: 0.4rem 0.6rem; white-space: nowrap; z-index: 2;
+  font-family: ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums;
+}
+.xhair { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; display: none; }
+
+/* sankey */
+.snode { stroke: var(--surface); stroke-width: 2; }
+.sflow-cash { fill: var(--cash); opacity: 0.30; }
+.sflow-ref { fill: var(--ref); opacity: 0.40; }
+.sflow-harvest { fill: var(--harvest); opacity: 0.62; }
+.slabel { fill: var(--ink); font-size: 13.5px; font-weight: 700; }
+.sval { fill: var(--ink-2); font-size: 12px; font-family: ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; }
+
+/* equation pipeline */
+.pipe { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.4rem; margin: 1.25rem 0; }
+.pipe .box {
+  background: var(--surface); border: 1px solid var(--hairline);
+  border-radius: 8px; padding: 0.5rem 0.7rem; display: flex; flex-direction: column;
+  justify-content: center; min-width: 0;
+}
+.pipe .box .k { font-size: 0.72rem; color: var(--ink-2); font-weight: 700; letter-spacing: 0.02em; }
+.pipe .box .f { font-size: 0.8rem; margin-top: 0.15rem; }
+.pipe .box.end-cash { border-color: var(--cash); }
+.pipe .box.end-ref { border-color: var(--ref); }
+.pipe .box.end-harvest { border-color: var(--harvest); background: var(--harvest-wash); }
+.pipe .arr { align-self: center; color: var(--muted); font-weight: 700; }
+
+/* stat tiles */
+.statrow { display: grid; grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr)); gap: 0.6rem; margin: 1.25rem 0; }
+.stat { background: var(--surface); border: 1px solid var(--hairline); border-radius: 10px; padding: 0.7rem 0.9rem; }
+.stat .sk { font-size: 0.72rem; color: var(--ink-2); font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
+.stat .sv { font-size: 1.2rem; font-weight: 800; margin-top: 0.2rem; font-variant-numeric: tabular-nums; }
+
+/* understanding checkpoint */
+.checkpoint {
+  border: 1px solid var(--hairline); border-left: 3px solid var(--cash);
+  border-radius: 0 10px 10px 0; background: var(--surface);
+  padding: 1.1rem 1.25rem; margin: 1.5rem 0;
+}
+.checkpoint .ck-tag {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  font-size: 0.75rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--cash); margin-bottom: 0.6rem;
+}
+.checkpoint .ck-tag svg { width: 1rem; height: 1rem; flex: none; }
+.curve-legend { display: flex; gap: 1.25rem; font-size: 0.8125rem; color: var(--ink-2); margin-top: 0.5rem; }
+.curve-legend b { color: var(--ink); }
+.curve-legend .swatch { display: inline-block; width: 1.1rem; height: 0; border-top: 2.5px solid; vertical-align: middle; margin-right: 0.35rem; }
+
+/* verdict / callout */
+.verdict {
+  border-left: 3px solid var(--harvest);
+  background: var(--harvest-wash);
+  border-radius: 0 10px 10px 0;
+  padding: 0.9rem 1.15rem; margin: 1.25rem 0;
+  font-size: 0.9375rem;
+}
+.verdict b { color: var(--harvest); }
+
+/* checklist */
+ol.steps { padding-left: 1.4rem; margin: 1rem 0; }
+ol.steps li { margin: 0.6rem 0; }
+ul { padding-left: 1.3rem; }
+li { margin: 0.35rem 0; }
+
+a { color: var(--ref); }
+a:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--harvest); outline-offset: 2px; border-radius: 4px; }
+
+footer {
+  max-width: 42rem; margin: 4rem auto 0; padding: 1.5rem 1.25rem 0;
+  border-top: 1px solid var(--hairline);
+  color: var(--muted); font-size: 0.8125rem;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .line-card, figure { transition: border-color 160ms ease; }
+}
+</style>
+
+<header>
+  <div class="mast">
+    <p class="eyebrow">Learning Guide · Quick Start 101</p>
+    <h1>Rebalancing กำไรมาจากไหน — อ่านสามเส้นให้เป็นใน 10 นาที</h1>
+    <p class="lede">คู่มือฉบับย่อของ Shannon Demon DNA Bot: หลักการ rebalance สู่มูลค่าคงที่
+    เครื่องหมายซื้อ/ขาย และวิธีวัดกำไรจากความผันผวนด้วยเส้น Eₙ — ตรงกับตารางและกราฟบนแดชบอร์ดทุกช่อง</p>
+    <div class="formula-strip mono">
+      <span><i class="dot" style="background:var(--ref)"></i>Rₙ = Fix_c·ln(Pₙ/P₀)</span>
+      <span><i class="dot" style="background:var(--cash)"></i>Aₙ = Fix_c·Σ(Pᵢ/Pᵢ₋₁−1)</span>
+      <span><i class="dot" style="background:var(--harvest)"></i><b>Eₙ = Aₙ − Rₙ = กำไร</b></span>
+    </div>
+  </div>
+</header>
+
+<main>
+
+<section>
+  <h2><span class="no">บทที่ 1</span>บอททำอะไร — rebalance สู่มูลค่าคงที่</h2>
+  <p>ตั้งเป้าถือหุ้นมูลค่าคงที่ <code>FIX_C</code> ดอลลาร์ตลอดเวลา (เช่น $1,500)
+  ทุก 5 นาทีบอทเช็คมูลค่าปัจจุบันแล้วดันกลับเข้าเป้า:</p>
+  <pre class="mono">value_now = จำนวนหุ้น × ราคาล่าสุด
+
+value_now &lt; FIX_C − DIFF   →  BUY   (ถือน้อยไป ซื้อเพิ่ม)
+value_now &gt; FIX_C + DIFF   →  SELL  (ถือเยอะไป ขายออก)
+อยู่ในช่วง ±DIFF            →  PASS  (ไม่ทำอะไร)
+
+จำนวนหุ้นที่ส่ง order = |FIX_C − value_now| / ราคาล่าสุด</pre>
+  <p>กฎนี้บังคับพฤติกรรมเดียว: <strong>ราคาลงถูกบังคับให้ซื้อถูก ราคาขึ้นถูกบังคับให้ขายแพง</strong>
+  — เก็บกำไรจากความผันผวน (volatility harvesting) โดยไม่ต้องทำนายทิศทางตลาดเลย</p>
+</section>
+
+<section>
+  <h2><span class="no">บทที่ 2</span>สามเส้นที่ต้องรู้ — และเส้นไหนคือ “กำไร”</h2>
+  <div class="lines">
+    <div class="line-card">
+      <span class="tag" style="color:var(--ref)">Rₙ · เส้นอ้างอิง</span>
+      <span class="fx mono">Rₙ = Fix_c × ln(Pₙ / P₀)</span>
+      <p>กระแสเงินสด baseline ที่ “ระดับราคา” อย่างเดียวอธิบายได้
+      (rebalance ต่อเนื่องเชิงอุดมคติ) ขึ้นลงตามเทรนด์ — ไม่ใช่ฝีมือ</p>
+    </div>
+    <div class="line-card">
+      <span class="tag" style="color:var(--cash)">Aₙ · เงินสดสะสมจริง</span>
+      <span class="fx mono">Aₙ = Fix_c × Σ(Pᵢ/Pᵢ₋₁ − 1)</span>
+      <p>เงินสดสุทธิจากการ rebalance ทุกสเต็ป (+ รับจากขาย, − จ่ายซื้อ)
+      ยัง<strong>ปนเทรนด์</strong>อยู่ จึงใช้วัดกำไรตรง ๆ ไม่ได้</p>
+    </div>
+    <div class="line-card hero-card">
+      <span class="tag" style="color:var(--harvest)">Eₙ · กำไร harvest จริง</span>
+      <span class="fx mono">Eₙ = Aₙ − Rₙ ≥ 0</span>
+      <p>ทุนส่วนเกินเหนือเส้นอ้างอิง — <strong>ตัดเส้น Rₙ (ทุน×เทรนด์) ทิ้ง</strong>
+      เหลือกำไรจากความผันผวนล้วน ๆ ที่ไม่มีทิศเทรนด์ปน และ<strong>ไม่ลดลงเลย</strong></p>
+    </div>
+  </div>
+  <div class="verdict">หลักจำข้อเดียว: <b>อยากรู้กำไร ให้ดู Eₙ</b> — Aₙ คือกระแสเงินสด
+  Rₙ คือ baseline ของทุน×เทรนด์ที่ต้องหักทิ้ง (คณิตศาสตร์รับประกันว่า Eₙ ≥ 0 เสมอ
+  เพราะ x − ln(1+x) ≥ 0 ทุกค่า x)</div>
+
+  <h3>เทรนด์ ≠ ทุน — สองอย่างนี้มาพันกันใน Rₙ</h3>
+  <p class="note">คำว่า “แยกทุนออก” มักถูกเข้าใจสลับ — ทุนกับเทรนด์เป็นคนละสิ่ง
+  แต่มาเจอกัน (คูณกัน) ในเส้นอ้างอิง Rₙ:</p>
+  <div class="tbl-wrap">
+    <table>
+      <caption>ทุน · เทรนด์ · Rₙ · Eₙ ต่างกันอย่างไร</caption>
+      <thead><tr><th>สิ่งของ</th><th>นิยาม</th><th>หน่วย</th></tr></thead>
+      <tbody>
+        <tr><td>ทุน</td><td class="mono">Fix_c</td><td>USD (คงที่ — ขนาดเงินที่ลงถือ)</td></tr>
+        <tr><td>เทรนด์</td><td class="mono">ln(Pₙ / P₀)</td><td>ตัวเลขล้วน (ทิศ/ขนาดที่ราคาวิ่ง)</td></tr>
+        <tr><td>Rₙ อ้างอิง</td><td class="mono">Fix_c × ln(Pₙ/P₀)</td><td>USD — <strong>ทุน “คูณ” เทรนด์</strong></td></tr>
+        <tr class="hl"><td><b>Eₙ กำไร</b></td><td class="mono">Aₙ − Rₙ</td><td>USD — ตัด Rₙ ทิ้ง ไม่มีทิศเทรนด์ปน</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">ข้อควรระวัง: Eₙ ที่ตัดเทรนด์ออกแล้ว <strong>ยังโตตามทุนอยู่</strong>
+  (<span class="mono">Eₙ = Fix_c × Σ(rᵢ − ln(1+rᵢ))</span>) — ลงทุนมากก็ harvest ได้มากเป็นสัดส่วน
+  ดังนั้น “แยกทุนออก” หมายถึง (ก) ไม่เอาเงินต้นมาปนในตัวเลขกำไร (Eₙ เริ่มจาก 0) และ
+  (ข) ตัดทิศเทรนด์ทิ้ง — ไม่ได้แปลว่ากำไรไม่เกี่ยวกับขนาดทุนเลย</p>
+
+  <h3>ภาพเดียวจบ — เงินสดจริงแตกเป็น “เทรนด์ + กำไร” (Sankey)</h3>
+  <p class="note">อ่านเหมือนท่อน้ำ: ความหนา = จำนวนเงิน · เงินสดจริง Aₙ ไหลเข้าจากซ้าย
+  แล้วแตกเป็นสองท่อ — <b style="color:var(--ref)">เทรนด์ Rₙ</b> (ท่ออ้วนที่ต้องตัดทิ้ง)
+  กับ <b style="color:var(--harvest)">กำไรจริง Eₙ</b> (ท่อบางที่เหลือ)</p>
+  <figure>
+    <figcaption>Aₙ = Rₙ + Eₙ <small>ณ ราคา 110 กลางสวิง (จากตัวอย่างรอบปิดในบทที่ 4) · Fix_c = 1,500</small></figcaption>
+    <svg class="chart" viewBox="0 0 720 292" role="img" aria-label="แผนภาพ Sankey: เงินสดจริง Aₙ 150 ดอลลาร์ แตกเป็นเทรนด์ Rₙ 142.96 ดอลลาร์ ท่ออ้วน และกำไรจริง Eₙ 7.04 ดอลลาร์ ท่อบาง">
+      <!-- flows -->
+      <path class="sflow-ref" d="M232,45 C360,45 360,35 488,35 L488,225.61 C360,225.61 360,235.61 232,235.61 Z"></path>
+      <path class="sflow-harvest" d="M232,235.61 C360,235.61 360,250 488,250 L488,259.39 C360,259.39 360,245 232,245 Z"></path>
+      <!-- nodes -->
+      <rect class="snode" x="210" y="45" width="22" height="200" fill="var(--cash)"></rect>
+      <rect class="snode" x="488" y="35" width="22" height="190.61" fill="var(--ref)"></rect>
+      <rect class="snode" x="488" y="250" width="22" height="9.39" fill="var(--harvest)"></rect>
+      <!-- labels -->
+      <text class="slabel" x="200" y="140" text-anchor="end">Aₙ · เงินสดสะสมจริง</text>
+      <text class="sval" x="200" y="159" text-anchor="end">$150.00 (100%)</text>
+      <text class="slabel" x="522" y="126">Rₙ · เทรนด์ (ตัดทิ้ง)</text>
+      <text class="sval" x="522" y="145">$142.96 (95%)</text>
+      <text class="slabel" x="522" y="252" fill="var(--harvest)">Eₙ · กำไรจริง</text>
+      <text class="sval" x="522" y="271">$7.04 (5%)</text>
+    </svg>
+  </figure>
+  <div class="verdict">เห็นชัดในภาพเดียว: เงินสดจริง $150 <b>แทบทั้งก้อนคือเทรนด์ (95%)</b>
+  ที่ต้องตัดทิ้ง — กำไร harvest จริงคือท่อทองบาง ๆ แค่ <b>$7.04 (5%)</b> เท่านั้น
+  นี่คือเหตุผลว่าทำไมห้ามอ่าน Aₙ เป็นกำไร ต้องดูที่ Eₙ</div>
+
+  <div class="checkpoint">
+    <span class="ck-tag">
+      <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="10" cy="10" r="9" stroke="currentColor" stroke-width="1.6"></circle><path d="M6 10.2l2.6 2.6L14 7.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+      เช็คความเข้าใจ — ยืนยันแล้ว
+    </span>
+    <p style="margin-top:0">
+      <b style="color:var(--ref)">Rₙ = Fix_c × ln(Pₙ/P₀)</b> คือ <b>เส้นต่อเนื่อง (smooth curve)</b> —
+      ใส่ราคาไหนก็ได้ก็ประเมินค่าได้ทันที ไม่ต้องมีประวัติราคาจริง<br>
+      <b style="color:var(--cash)">Aₙ = Fix_c × Σ(Pᵢ/Pᵢ₋₁ − 1)</b> คือ <b>เส้นขั้นบันได (ไม่ต่อเนื่อง)</b> —
+      มีค่าเฉพาะจุดที่ <b>ราคาปัจจุบัน</b> เกิดขึ้นจริงเท่านั้น
+    </p>
+    <p>ทั้งสองเส้น “เป้าหมาย” เดียวกันคือ<strong>ราคาปัจจุบัน Pₙ</strong> — แต่เพราะเส้นหนึ่งเรียบ
+    (สนแค่ปลายทาง) ส่วนอีกเส้นขั้นบันได (สนทุกก้าวที่เดินจริง) พอราคาย้อนมาที่จุดเดิม
+    ทั้งสองเส้นเลย “ไม่ตรงกัน” — ช่องว่างนั้นแหละคือ <b style="color:var(--harvest)">Eₙ = กำไร</b></p>
+
+    <figure style="margin-top:1rem">
+      <figcaption>ราคาเดิม P=100 ถูกประเมิน 2 ครั้ง — Rₙ ให้ค่าเดิมเป๊ะ, Aₙ ให้ค่าไม่เท่าเดิม
+        <small>เส้นโค้ง = Rₙ (ทุกราคา) · เส้นเหลี่ยม = Aₙ (เฉพาะจุดที่เดินจริง 100→110→100)</small></figcaption>
+      <svg class="chart" viewBox="0 0 480 320" role="img" aria-label="กราฟเทียบ Rn เส้นโค้งต่อเนื่องกับ An เส้นทางจริงไม่ต่อเนื่อง ที่ราคา 100 ซึ่งถูกเยือนสองครั้ง Rn ให้ค่า 0 ทั้งสองครั้ง แต่ An ให้ค่า 0 แล้วภายหลัง 13.64 ส่วนต่างคือ En กำไร 13.64">
+        <line class="gridline" x1="40" y1="198.75" x2="440" y2="198.75"></line>
+        <line class="axisline" x1="40" y1="16" x2="40" y2="292"></line>
+        <line class="axisline" x1="40" y1="292" x2="440" y2="292"></line>
+        <text class="ticktext" x="140" y="308" text-anchor="middle">P=100</text>
+        <text class="ticktext" x="340" y="308" text-anchor="middle">P=110</text>
+        <text class="ticktext" x="34" y="202" text-anchor="end">0</text>
+        <!-- shared "current price" guideline: same x visited twice -->
+        <line class="xhair" x1="140" y1="16" x2="140" y2="292" style="display:block"></line>
+        <!-- Rn smooth continuous curve -->
+        <polyline class="series" stroke="var(--ref)" points="40,261.26 90,229.61 140,198.75 190,168.65 240,139.29 290,110.61 340,82.59 390,55.21 440,28.42"></polyline>
+        <!-- An staircase / actual path: only exists at real trade points -->
+        <polyline class="series" stroke="var(--cash)" stroke-width="2.5" points="140,198.75 340,76.875 140,187.6375"></polyline>
+        <circle class="pt" fill="var(--ref)" cx="140" cy="198.75" r="4"></circle>
+        <circle class="pt" fill="var(--cash)" cx="340" cy="76.875" r="4"></circle>
+        <circle class="pt" fill="var(--cash)" cx="140" cy="187.6375" r="4.5"></circle>
+        <!-- gap bracket at shared price point -->
+        <line x1="118" y1="198.75" x2="118" y2="187.6375" stroke="var(--harvest)" stroke-width="2"></line>
+        <line x1="112" y1="198.75" x2="124" y2="198.75" stroke="var(--harvest)" stroke-width="2"></line>
+        <line x1="112" y1="187.6375" x2="124" y2="187.6375" stroke="var(--harvest)" stroke-width="2"></line>
+        <text class="dlabel" x="78" y="196" fill="var(--harvest)" font-weight="700" text-anchor="end">Eₙ</text>
+        <text class="dlabel" x="150" y="130" fill="var(--ref)">Rₙ = 0 ทั้งสองครั้ง</text>
+        <text class="dlabel" x="150" y="181" fill="var(--cash)" font-weight="700">Aₙ = 13.64 (มาจริง)</text>
+        <text class="dlabel" x="150" y="199" fill="var(--ink-2)">Aₙ = 0 (เริ่มต้น)</text>
+        <text class="dlabel" x="360" y="70" fill="var(--cash)">Aₙ = 150 ที่ P=110</text>
+      </svg>
+      <div class="tip mono"></div>
+    </figure>
+    <div class="curve-legend">
+      <span><i class="swatch" style="border-color:var(--ref)"></i><b>Rₙ</b> เส้นโค้ง — ประเมินได้ทุกราคา</span>
+      <span><i class="swatch" style="border-color:var(--cash)"></i><b>Aₙ</b> เส้นทางจริง — มีค่าเฉพาะจุดที่เดินจริง</span>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><span class="no">บทที่ 3</span>เครื่องหมายบนตาราง — สองมุมที่สวนทางกัน</h2>
+  <p>ตารางแดชบอร์ดมีตัวเลขเงิน 2 ตระกูลที่ใช้เครื่องหมาย<strong>คนละแบบ</strong> อ่านผิดคืองงทันที:</p>
+  <div class="tbl-wrap">
+    <table>
+      <caption>เครื่องหมายเงินบนตาราง trade log</caption>
+      <thead><tr><th>คอลัมน์</th><th>มุมมอง</th><th>เครื่องหมาย +</th><th>เครื่องหมาย −</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>ส่วนต่างเป้าหมาย (USD)</td>
+          <td>ปรับพอร์ตเข้าเป้า</td>
+          <td class="pos">ต้องซื้อเข้า (ต่ำกว่าเป้า)</td>
+          <td class="neg">ต้องขายออก (เกินเป้า)</td>
+        </tr>
+        <tr>
+          <td>ΔAₙ / Aₙ (USD)</td>
+          <td>กระแสเงินสด</td>
+          <td class="pos">เงินสดรับ — จากการขาย</td>
+          <td class="neg">เงินสดจ่าย — จากการซื้อ</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">สังเกตว่า “ขาย” เป็นลบในมุมปรับพอร์ต แต่เป็นบวกในมุมเงินสด — ถูกทั้งคู่
+  เพราะตอบคนละคำถาม: คอลัมน์แรกตอบ “ต้องเติมหรือเอาเงินออกเท่าไหร่ให้พอร์ตกลับเข้าเป้า”
+  ส่วน ΔAₙ ตอบ “เงินสดไหลเข้าหรือออกจากกระเป๋าเท่าไหร่”</p>
+</section>
+
+<section class="wide">
+  <h2><span class="no">บทที่ 4</span>กำไรเกิดเมื่อรอบปิด — ต้องจับคู่ซื้อ-ขาย ขาเดียวไม่นับ</h2>
+  <p style="max-width:42rem">ขายขาเดียวตอนราคาขึ้น <em>ไม่สร้างกำไร</em> — ผลรวมเท่ากับถือเฉย ๆ (buy &amp; hold) เป๊ะ
+  กำไร harvest เกิดเมื่อ<strong>รอบปิด</strong>: ขายแพงแล้วซื้อกลับถูก (หรือกลับกัน)
+  จนจำนวนหุ้นกลับมาเท่าเดิมพร้อมเงินสดส่วนเกิน ลองเทียบสองเหตุการณ์ (Fix_c = 1,500):</p>
+
+  <div class="legend" aria-hidden="true">
+    <span><i class="dot" style="background:var(--cash)"></i><b>Aₙ</b> เงินสดสะสม</span>
+    <span><i class="dot" style="background:var(--ref)"></i><b>Rₙ</b> เส้นอ้างอิง</span>
+    <span><i class="dot" style="background:var(--harvest)"></i><b>Eₙ</b> กำไร harvest</span>
+  </div>
+
+  <div class="chart-pair">
+    <figure id="fig-loop">
+      <figcaption>ครบรอบ: 100 → 110 → 100 <small>ราคากลับที่เดิม → Rₙ กลับเป็น 0 → Eₙ = Aₙ = +13.64 ล็อกเป็นเงินสด</small></figcaption>
+      <svg class="chart" viewBox="0 0 460 300" role="img" aria-label="กราฟเส้น Aₙ Rₙ Eₙ กรณีราคาครบรอบ 100 ไป 110 กลับมา 100 จบที่ Eₙ +13.64">
+        <line class="gridline" x1="44" y1="246" x2="354" y2="246"></line>
+        <line class="gridline" x1="44" y1="169.3" x2="354" y2="169.3"></line>
+        <line class="gridline" x1="44" y1="92.7" x2="354" y2="92.7"></line>
+        <line class="gridline" x1="44" y1="16" x2="354" y2="16"></line>
+        <text class="ticktext" x="38" y="250" text-anchor="end">0</text>
+        <text class="ticktext" x="38" y="173" text-anchor="end">50</text>
+        <text class="ticktext" x="38" y="96" text-anchor="end">100</text>
+        <text class="ticktext" x="38" y="20" text-anchor="end">150</text>
+        <text class="ticktext" x="44" y="266" text-anchor="middle">P=100</text>
+        <text class="ticktext" x="199" y="266" text-anchor="middle">110</text>
+        <text class="ticktext" x="354" y="266" text-anchor="middle">100</text>
+        <line class="xhair" x1="0" y1="16" x2="0" y2="246"></line>
+        <polyline class="series" stroke="var(--ref)" points="44,246 199,26.8 354,246"></polyline>
+        <polyline class="series" stroke="var(--cash)" points="44,246 199,16 354,225.1"></polyline>
+        <polyline class="series" stroke="var(--harvest)" stroke-width="2.5" points="44,246 199,235.2 354,225.1"></polyline>
+        <circle class="pt" fill="var(--harvest)" cx="354" cy="225.1" r="4"></circle>
+        <text class="dlabel" x="362" y="222" fill="var(--harvest)" font-weight="700">Eₙ = Aₙ = +13.64</text>
+        <text class="dlabel" x="362" y="250">Rₙ = 0</text>
+      </svg>
+      <div class="tip mono"></div>
+    </figure>
+
+    <figure id="fig-oneway">
+      <figcaption>ขาเดียว: 314.55 → 316.64 <small>ข้อมูลจริง 10 ก.ค. — ราคาขึ้นทางเดียว Aₙ ทับ Rₙ สนิท → Eₙ ≈ 0</small></figcaption>
+      <svg class="chart" viewBox="0 0 460 300" role="img" aria-label="กราฟเส้น Aₙ Rₙ Eₙ จากข้อมูลจริง ราคาขึ้นทางเดียว Eₙ เกือบศูนย์">
+        <line class="gridline" x1="44" y1="246" x2="354" y2="246"></line>
+        <line class="gridline" x1="44" y1="131" x2="354" y2="131"></line>
+        <line class="gridline" x1="44" y1="16" x2="354" y2="16"></line>
+        <text class="ticktext" x="38" y="250" text-anchor="end">0</text>
+        <text class="ticktext" x="38" y="135" text-anchor="end">5</text>
+        <text class="ticktext" x="38" y="20" text-anchor="end">10</text>
+        <text class="ticktext" x="44" y="266" text-anchor="middle">18:40</text>
+        <text class="ticktext" x="199" y="266" text-anchor="middle">19:15</text>
+        <text class="ticktext" x="354" y="266" text-anchor="middle">19:50</text>
+        <line class="xhair" x1="0" y1="16" x2="0" y2="246"></line>
+        <polyline class="series" stroke="var(--ref)" points="44,246 88.3,218.6 132.6,201.2 176.9,160 221.1,137 265.4,85.2 309.7,52.3 354,18.1"></polyline>
+        <polyline class="series" stroke="var(--cash)" stroke-dasharray="6 4" points="44,246 88.3,218.6 132.6,201.2 176.9,160 221.1,137 265.4,85 309.7,52.3 354,17.8"></polyline>
+        <polyline class="series" stroke="var(--harvest)" stroke-width="2.5" points="44,246 88.3,246 132.6,246 176.9,246 221.1,246 265.4,246 309.7,246 354,245.8"></polyline>
+        <circle class="pt" fill="var(--harvest)" cx="354" cy="245.8" r="4"></circle>
+        <text class="dlabel" x="362" y="22">Aₙ ≈ Rₙ ≈ +9.9</text>
+        <text class="dlabel" x="362" y="249" fill="var(--harvest)" font-weight="700">Eₙ ≈ 0</text>
+      </svg>
+      <div class="tip mono"></div>
+    </figure>
+  </div>
+  <p class="note" style="max-width:42rem">เส้น Aₙ (ประ) ทับ Rₙ สนิทในกราฟขวา — ช่องว่างระหว่างสองเส้นนี้แหละคือกำไร
+  ไม่มีช่องว่าง = ไม่มี harvest</p>
+
+  <div class="tbl-wrap" style="max-width:42rem">
+    <table>
+      <caption>บัญชีรอบปิด 100 → 110 → 100 (Fix_c = 1,500)</caption>
+      <thead><tr><th>สเต็ป</th><th>เหตุการณ์</th><th class="num">เงินสด ΔAₙ</th><th class="num">Aₙ</th><th class="num">Rₙ</th><th class="num">Eₙ</th></tr></thead>
+      <tbody>
+        <tr><td class="num">0</td><td>เริ่ม P=100 ถือ 15 หุ้น</td><td class="num">0.00</td><td class="num">0.00</td><td class="num">0.00</td><td class="num">0.00</td></tr>
+        <tr><td class="num">1</td><td>ราคา 110 → <span class="neg">ขาย</span> ล็อกส่วนเกิน</td><td class="num pos">+150.00</td><td class="num">150.00</td><td class="num">142.96</td><td class="num">7.04</td></tr>
+        <tr class="hl"><td class="num">2</td><td>ราคากลับ 100 → <span class="pos">ซื้อคืน</span> ปิดรอบ</td><td class="num neg">−136.36</td><td class="num">13.64</td><td class="num">0.00</td><td class="num"><b>13.64</b></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="verdict" style="max-width:42rem">จบรอบ: หุ้นกลับมา 15 หุ้นเท่าเดิม แต่มีเงินสดเกินมา
+  <b>+13.64</b> — ชนะ buy &amp; hold เป๊ะเท่านี้ นี่คือกำไรที่ “ซื้อถูกขายแพง” จับคู่กันครบ
+  ระหว่างที่รอบยังไม่ปิด Eₙ ที่โผล่มาแล้วคือกำไรค้างท่อ (unrealized) รอราคาย้อนกลับมาปิดรอบ</div>
+</section>
+
+<section>
+  <h2><span class="no">บทที่ 5</span>Anchor P₀ ให้ถูก — Eₙ ต้องเริ่มจาก 0 (แยกทุนออก)</h2>
+  <p>เส้นทั้งสามคำนวณจากหน้าต่าง trade log ที่มองเห็น ดังนั้น P₀ ต้องเป็น
+  <strong>ราคาแรกในหน้าต่าง</strong> — ถ้าตั้ง P₀ ไกลจากราคาจริง (เช่นค่า default 100
+  ขณะหุ้นอยู่ที่ 314) ระบบจะมองช่วง 100→314 เป็น “หนึ่งสเต็ป” แล้วฉีดเงินปลอมก้อนยักษ์เข้ามา:</p>
+  <div class="tbl-wrap">
+    <table>
+      <caption>หน้าต่างเดียวกัน (AAPL, 8 แถว) — ต่างกันแค่จุด anchor</caption>
+      <thead><tr><th>ตัวชี้วัดแถวล่าสุด</th><th class="num">P₀ = 100 (ผิด)</th><th class="num">P₀ = 314.55 ราคาแรกในหน้าต่าง (ถูก)</th></tr></thead>
+      <tbody>
+        <tr><td>ΔAₙ สเต็ปแรก</td><td class="num neg">+3,218.25 (ปลอม)</td><td class="num pos">0.00</td></tr>
+        <tr><td>Aₙ เงินสดสะสม</td><td class="num">+3,228.17</td><td class="num">+9.92</td></tr>
+        <tr><td>Rₙ อ้างอิง</td><td class="num">+1,728.87</td><td class="num">+9.91</td></tr>
+        <tr class="hl"><td><b>Eₙ กำไร harvest</b></td><td class="num neg">+1,499.30 (ภาพลวง)</td><td class="num"><b>+0.01</b> (ความจริง)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>anchor ถูกต้องแล้ว แถวเก่าสุดจะได้ <span class="mono">Aₙ = Rₙ = Eₙ = 0</span> โดยอัตโนมัติ
+  — <strong>เงินต้นไม่ถูกปนเข้าเส้นกำไรตั้งแต่ index 0</strong> (นี่คือความหมาย “แยกทุนออก”
+  แบบข้อ ก. — Eₙ นับจาก 0 ไม่ใช่ “$1,500 + กำไร”) ทำให้อ่าน Eₙ เป็น
+  “กำไรสะสมตั้งแต่ต้นหน้าต่าง” ได้ตรง ๆ (แดชบอร์ดเวอร์ชันปัจจุบัน anchor ให้อัตโนมัติแล้ว
+  ค่า t₀ ใน sidebar ใช้กับเส้นสาธิตตอนไม่มีข้อมูลเท่านั้น)</p>
+</section>
+
+<section>
+  <h2><span class="no">บทที่ 6</span>PASS ทุกแถว = ยังไม่มีเทรดจริง</h2>
+  <p>เส้น Aₙ/Rₙ/Eₙ บนแดชบอร์ดคำนวณจาก <em>เส้นราคา</em> เสมือน rebalance ทุก tick
+  แต่แถวที่สถานะ <code>PASS_THRESHOLD</code> คือบอท<strong>ไม่ได้ส่ง order</strong>
+  (ส่วนต่างยังไม่ทะลุ ±DIFF) ดังนั้น:</p>
+  <ul>
+    <li>ถ้าหน้าต่างมีแต่ PASS → ตัวเลขทั้งหมดเป็น <strong>what-if เชิงทฤษฎี</strong> ไม่ใช่เงินที่ทำได้จริง — แดชบอร์ดจะขึ้นการ์ดเตือนพร้อม metric “เทรดจริง (BUY/SELL) = 0”</li>
+    <li>เงินจริงเกิดเฉพาะแถว <code>BUY</code>/<code>SELL</code> ที่ order ถูก fill — และกำไร realize เมื่อคู่ซื้อ-ขายปิดรอบ (บทที่ 4)</li>
+    <li>DIFF คือตัวคุมจังหวะ: แคบไป = เทรดถี่ ค่าธรรมเนียมกิน · กว้างไป = ปล่อยรอบสวิงหลุดมือ ไม่ได้เก็บ harvest</li>
+  </ul>
+</section>
+
+<section class="wide">
+  <h2><span class="no">บทที่ 7</span>ภาพรวมทั้งระบบ — จาก Random Test จริง</h2>
+  <p style="max-width:42rem">รันจริงด้วยฟังก์ชันชุดเดียวกับบอท
+  (<code>simulate_rebalancing_cashflow</code> · <code>calculate_shannon_decision</code>)
+  สุ่มราคา 30 สเต็ป แล้วไล่ทุกสมการตั้งแต่ DNA จนถึงกำไร Eₙ — ผลลัพธ์ reproducible (seed = 6)</p>
+
+  <div class="statrow" style="max-width:42rem">
+    <div class="stat"><div class="sk">ราคา P₀ → Pₙ</div><div class="sv">100 → 198.21</div></div>
+    <div class="stat"><div class="sk">SELL / BUY / PASS</div><div class="sv">16 / 9 / 5</div></div>
+    <div class="stat"><div class="sk">Aₙ เงินสดสุทธิ</div><div class="sv" style="color:var(--cash)">+1,172</div></div>
+    <div class="stat"><div class="sk">Eₙ กำไร harvest</div><div class="sv" style="color:var(--harvest)">+146</div></div>
+  </div>
+
+  <h3>ทุกสมการ ต้นจนจบ</h3>
+  <div class="pipe" style="max-width:42rem">
+    <div class="box"><span class="k">1 · DNA</span><span class="f mono">1 = เทรด · 0 = ข้าม</span></div>
+    <span class="arr">→</span>
+    <div class="box"><span class="k">2 · ราคา</span><span class="f mono">Pₙ</span></div>
+    <span class="arr">→</span>
+    <div class="box"><span class="k">3 · มูลค่าพอร์ต</span><span class="f mono">value = qty·Pₙ</span></div>
+    <span class="arr">→</span>
+    <div class="box"><span class="k">4 · ส่วนต่างเป้าหมาย</span><span class="f mono">|Fix_c − value|</span></div>
+    <span class="arr">→</span>
+    <div class="box"><span class="k">5 · ตัดสินใจ</span><span class="f mono">BUY/SELL/PASS · ±DIFF</span></div>
+    <span class="arr">→</span>
+    <div class="box"><span class="k">6 · เงินสดต่อสเต็ป</span><span class="f mono">ΔAₙ = Fix_c(Pₙ/Pₙ₋₁−1)</span></div>
+    <span class="arr">→</span>
+    <div class="box end-cash"><span class="k">7 · เงินสดสะสม</span><span class="f mono">Aₙ = ΣΔAₙ</span></div>
+    <span class="arr">→</span>
+    <div class="box end-ref"><span class="k">8 · เส้นอ้างอิง</span><span class="f mono">Rₙ = Fix_c·ln(Pₙ/P₀)</span></div>
+    <span class="arr">→</span>
+    <div class="box end-harvest"><span class="k">9 · กำไร ✓</span><span class="f mono">Eₙ = Aₙ − Rₙ</span></div>
+  </div>
+
+  <h3>เงินทั้งระบบไหลไปไหน (Sankey — เลขจริงจากการรัน)</h3>
+  <p class="note" style="max-width:42rem">ท่ออ่านซ้าย→ขวา ความหนา = เงิน · ทุกท่อ conserve:
+  <span class="mono">S⁺ = S⁻ + Aₙ</span> และ <span class="mono">Aₙ = Rₙ + Eₙ</span></p>
+  <figure>
+    <figcaption>ขายได้ → ซื้อกลับ → เหลือสุทธิ → แยกเทรนด์กับกำไร <small>30 สเต็ป · Fix_c = 1,500 · seed 6</small></figcaption>
+    <svg class="chart" viewBox="0 0 870 392" role="img" aria-label="แผนภาพ Sankey เต็มระบบ: รับจากขาย S+ 2146 แตกเป็นจ่ายซื้อกลับ S- 975 กับเงินสดสุทธิ An 1172 ซึ่งแตกต่อเป็นเทรนด์ Rn 1026 กับกำไรจริง En 146">
+      <!-- flows (colored by destination) -->
+      <path class="sflow-cash"    d="M197,62 C308,62 308,62 420,62 L420,203.9 C308,203.9 308,203.9 197,203.9 Z"></path>
+      <path class="sflow-harvest" style="fill:var(--sell);opacity:0.34" d="M197,203.9 C308,203.9 308,244 420,244 L420,362 C308,362 308,322 197,322 Z"></path>
+      <path class="sflow-ref"     d="M442,62 C553,62 553,52 665,52 L665,176.3 C553,176.3 553,186.3 442,186.3 Z"></path>
+      <path class="sflow-harvest" d="M442,186.3 C553,186.3 553,212 665,212 L665,229.6 C553,229.6 553,203.9 442,203.9 Z"></path>
+      <!-- nodes -->
+      <rect class="snode" x="175" y="62"  width="22" height="260"   fill="var(--cash)"></rect>
+      <rect class="snode" x="420" y="62"  width="22" height="141.9" fill="var(--cash)"></rect>
+      <rect class="snode" x="420" y="244" width="22" height="118"   fill="var(--sell)"></rect>
+      <rect class="snode" x="665" y="52"  width="22" height="124.3" fill="var(--ref)"></rect>
+      <rect class="snode" x="665" y="212" width="22" height="17.6"  fill="var(--harvest)"></rect>
+      <!-- labels -->
+      <text class="slabel" x="165" y="185" text-anchor="end">รับจากขาย · S⁺</text>
+      <text class="sval"   x="165" y="204" text-anchor="end">$2,146 (100%)</text>
+      <text class="slabel" x="431" y="54"  text-anchor="middle">Aₙ สุทธิ · $1,172 (55%)</text>
+      <text class="slabel" x="452" y="298">จ่ายซื้อกลับ · S⁻</text>
+      <text class="sval"   x="452" y="317">$975 (45% หมุนกลับ)</text>
+      <text class="slabel" x="697" y="108">Rₙ · เทรนด์</text>
+      <text class="sval"   x="697" y="127">$1,026 (88%)</text>
+      <text class="slabel" x="697" y="214" fill="var(--harvest)">Eₙ · กำไรจริง</text>
+      <text class="sval"   x="697" y="233">$146 (12%)</text>
+    </svg>
+  </figure>
+  <div class="verdict" style="max-width:42rem">อ่านปราดเดียวจบทั้งระบบ: ขายเก็บเงินได้ $2,146
+  แต่ <b>เกือบครึ่ง ($975) หมุนกลับไปซื้อถูก</b> เหลือสุทธิ $1,172 — และในก้อนสุทธินี้
+  <b style="color:var(--ref)">88% คือเทรนด์</b> (ราคาขึ้นจาก 100→198) ส่วน
+  <b style="color:var(--harvest)">กำไร harvest จริงคือ $146 (12%)</b> คือส่วนที่ “ซื้อถูก-ขายแพง”
+  จับคู่กันได้เกินเส้นอ้างอิง ตัวเลขนี้แหละที่แดชบอร์ดโชว์เป็น Eₙ</div>
+</section>
+
+<section>
+  <h2><span class="no">บทที่ 8</span>Quick Start — ตั้งค่าและอ่านแดชบอร์ดตามลำดับ</h2>
+  <h3>ตั้งค่าบอท (env vars หลัก)</h3>
+  <pre class="mono">FIX_C   = 1500      # มูลค่าเป้าหมายที่ถือคงที่ (USD)
+P0      = 314.55    # ราคาอ้างอิงตอนเปิดสถานะ → ใช้คำนวณ baseline_pnl
+DIFF    = 60        # ช่องว่าง ±USD ก่อนยอมเทรด (คุมความถี่)
+DNA_CODE = bypass:100   # ตารางเวลาเทรด (1=เทรด, 0=ข้าม)</pre>
+  <p class="note">ขั้นตอน deploy เต็ม ๆ อยู่ใน <code>doc/QUICKSTART.md</code> ของ repo บอท —
+  เอกสารนี้โฟกัสที่การอ่านผลให้เป็น</p>
+  <h3>อ่านแดชบอร์ดตามลำดับนี้</h3>
+  <ol class="steps">
+    <li><strong>ดู Eₙ ก่อน</strong> — นี่คือกำไร harvest สะสม (เริ่มจาก 0 เสมอ) ถ้าโตขึ้น = เก็บรอบสวิงได้จริง</li>
+    <li><strong>เช็ค “เทรดจริง (BUY/SELL)”</strong> — ถ้าเป็น 0 ตัวเลขทั้งกระดานคือทฤษฎี ยังไม่มีเงินจริง</li>
+    <li><strong>Aₙ กับ Rₙ ไว้ดูบริบท</strong> — สองเส้นห่างกันแค่ไหน = harvest มากแค่นั้น ทับกันสนิท = ราคาวิ่งทางเดียว</li>
+    <li><strong>คอลัมน์ส่วนต่างเป้าหมาย</strong> — เครื่องหมายบอกทิศ: <span class="neg">− ต้องขายออก</span> · <span class="pos">+ ต้องซื้อเข้า</span> (อย่าสับสนกับเครื่องหมายเงินสดของ ΔAₙ)</li>
+    <li><strong>เส้น Rₙ เต็มประวัติ</strong> ตั้งแต่ P₀ จริงของบอท ดูได้จากคอลัมน์ <code>baseline_pnl</code> ที่บันทึกทุกแถว</li>
+  </ol>
+  <div class="verdict">สรุปทั้งเล่มในหนึ่งบรรทัด: <b>ซื้อถูก-ขายแพงให้ครบคู่ → ช่องว่างเหนือเส้นอ้างอิงคือกำไร →
+  อ่านที่ Eₙ ซึ่งเริ่มจากศูนย์และไม่มีวันถอยหลัง</b></div>
+</section>
+
+</main>
+
+<footer>
+  Shannon Demon DNA Bot · Rebalancing Learning Guide 101 · ตัวเลขตัวอย่างจาก trade log จริง (AAPL, 2026-07-10) และบัญชีรอบปิด Fix_c = 1,500
+</footer>
+
+<script>
+(function () {
+  "use strict";
+  // ---- hover layer: crosshair + nearest-step tooltip -----------------------
+  var charts = {
+    "fig-loop": {
+      xs: [44, 199, 354],
+      steps: ["P = 100 (เริ่ม)", "P = 110 (ขาย)", "P = 100 (ซื้อคืน)"],
+      series: [
+        { name: "Aₙ", vals: [0, 150, 13.64] },
+        { name: "Rₙ", vals: [0, 142.96, 0] },
+        { name: "Eₙ", vals: [0, 7.04, 13.64] }
+      ]
+    },
+    "fig-oneway": {
+      xs: [44, 88.3, 132.6, 176.9, 221.1, 265.4, 309.7, 354],
+      steps: ["18:40 · 314.55", "18:50 · 314.80", "19:00 · 314.96", "19:10 · 315.34",
+              "19:20 · 315.55", "19:30 · 316.02", "19:40 · 316.32", "19:50 · 316.64"],
+      series: [
+        { name: "Aₙ", vals: [0, 1.19, 1.95, 3.74, 4.74, 7.00, 8.42, 9.92] },
+        { name: "Rₙ", vals: [0, 1.19, 1.95, 3.74, 4.74, 6.99, 8.42, 9.91] },
+        { name: "Eₙ", vals: [0, 0, 0, 0, 0, 0, 0, 0.01] }
+      ]
+    }
+  };
+  Object.keys(charts).forEach(function (id) {
+    var fig = document.getElementById(id);
+    if (!fig) return;
+    var cfg = charts[id];
+    var svg = fig.querySelector("svg");
+    var tip = fig.querySelector(".tip");
+    var hair = fig.querySelector(".xhair");
+    function fmt(v) { return (v > 0 ? "+" : "") + v.toFixed(2); }
+    function onMove(evt) {
+      var pt = evt.touches ? evt.touches[0] : evt;
+      var rect = svg.getBoundingClientRect();
+      var vx = (pt.clientX - rect.left) * (460 / rect.width);
+      var best = 0, bestD = Infinity;
+      cfg.xs.forEach(function (x, i) {
+        var d = Math.abs(x - vx);
+        if (d < bestD) { bestD = d; best = i; }
+      });
+      hair.setAttribute("x1", cfg.xs[best]);
+      hair.setAttribute("x2", cfg.xs[best]);
+      hair.style.display = "block";
+      tip.innerHTML = "<b>" + cfg.steps[best] + "</b><br>" +
+        cfg.series.map(function (s) { return s.name + " " + fmt(s.vals[best]); }).join("<br>");
+      tip.style.display = "block";
+      var figRect = fig.getBoundingClientRect();
+      var px = cfg.xs[best] * (rect.width / 460) + (rect.left - figRect.left);
+      var flip = px > figRect.width - 130;
+      tip.style.left = flip ? "" : (px + 12) + "px";
+      tip.style.right = flip ? (figRect.width - px + 12) + "px" : "";
+      tip.style.top = "3.2rem";
+    }
+    function onLeave() { tip.style.display = "none"; hair.style.display = "none"; }
+    svg.addEventListener("mousemove", onMove);
+    svg.addEventListener("touchstart", onMove, { passive: true });
+    svg.addEventListener("touchmove", onMove, { passive: true });
+    svg.addEventListener("mouseleave", onLeave);
+    svg.addEventListener("touchend", onLeave);
+  });
+})();
+</script>
