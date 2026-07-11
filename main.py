@@ -209,13 +209,23 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
     )
     decision_data = _decision_payload(decision)
 
+    # last_price / quantity are duplicated at the top level because the
+    # dashboard reads the trade log through pd.json_normalize(sep="_") and
+    # looks the price up by column name — nested-only fields would surface
+    # as market_state_last_price and miss its TRADE_PRICE_COLUMNS lookup.
+    trade_log_base = {
+        **reserved.to_dict(),
+        "last_price": market_state.last_price,
+        "quantity": market_state.quantity,
+        "market_state": market_state.to_dict(),
+        "decision": decision_data,
+        "baseline_pnl": decision.baseline_pnl,
+    }
+
     if decision.action == "PASS":
         _log_trade(config, {
-            **reserved.to_dict(),
+            **trade_log_base,
             "status": "PASS_THRESHOLD",
-            "market_state": market_state.to_dict(),
-            "decision": decision_data,
-            "baseline_pnl": decision.baseline_pnl,
         })
         return _ok(
             "PASS_THRESHOLD",
@@ -229,11 +239,8 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
     # for this symbol; the next DNA tick will recalculate from a fresh position.
     if broker.has_open_order(config.symbol):
         _log_trade(config, {
-            **reserved.to_dict(),
+            **trade_log_base,
             "status": "PASS_OPEN_ORDER",
-            "market_state": market_state.to_dict(),
-            "decision": decision_data,
-            "baseline_pnl": decision.baseline_pnl,
         })
         return _ok(
             "PASS_OPEN_ORDER",
@@ -255,13 +262,10 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
     )
 
     _log_trade(config, {
-        **reserved.to_dict(),
+        **trade_log_base,
         "status": "ORDER_SUBMITTED",
         "client_order_id": client_order_id,
-        "market_state": market_state.to_dict(),
-        "decision": decision_data,
         "order_result": order_result.to_dict(),
-        "baseline_pnl": decision.baseline_pnl,
     })
 
     return _ok(
