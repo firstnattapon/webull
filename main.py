@@ -213,6 +213,7 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
         _log_trade(config, {
             **reserved.to_dict(),
             "status": "PASS_THRESHOLD",
+            "last_price": market_state.last_price,
             "market_state": market_state.to_dict(),
             "decision": decision_data,
             "baseline_pnl": decision.baseline_pnl,
@@ -231,6 +232,7 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
         _log_trade(config, {
             **reserved.to_dict(),
             "status": "PASS_OPEN_ORDER",
+            "last_price": market_state.last_price,
             "market_state": market_state.to_dict(),
             "decision": decision_data,
             "baseline_pnl": decision.baseline_pnl,
@@ -258,6 +260,7 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
         **reserved.to_dict(),
         "status": "ORDER_SUBMITTED",
         "client_order_id": client_order_id,
+        "last_price": market_state.last_price,
         "market_state": market_state.to_dict(),
         "decision": decision_data,
         "order_result": order_result.to_dict(),
