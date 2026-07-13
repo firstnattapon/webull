@@ -76,11 +76,6 @@ FILLED_QUANTITY_FIELDS = (
     "cumulative_filled_quantity", "cumulativeFilledQuantity",
     "executed_quantity", "executedQuantity", "filled",
 )
-# Terminal states in which the order has (at least partially) executed.
-FILLED_ORDER_STATUSES = frozenset({
-    "FILLED", "PARTIALLY_FILLED", "PARTIAL_FILLED", "PARTIALLYFILLED",
-})
-
 # ---------------------------------------------------------------------------
 # Exceptions
 # ---------------------------------------------------------------------------
@@ -162,10 +157,15 @@ class OrderStatus:
 
     @property
     def is_filled(self) -> bool:
-        """Whether any quantity actually executed."""
-        if self.filled_quantity > 0:
-            return True
-        return self.status.strip().upper() in FILLED_ORDER_STATUSES
+        """Whether Webull reports a positive executed quantity.
+
+        A status label alone is not enough for the trading log: the contract
+        exposes ``filled_quantity`` specifically so an accepted order can be
+        distinguished from one that actually changed the position.  If a
+        transient/inconsistent response says ``FILLED`` with zero quantity,
+        the caller keeps polling instead of recording a phantom fill.
+        """
+        return self.filled_quantity > 0
 
     @property
     def is_terminal_unfilled(self) -> bool:
@@ -604,6 +604,22 @@ class WebullBroker:
 
         return MarketState(quantity=quantity, last_price=last_price)
 
+    def get_position_quantity(self, symbol: str) -> float:
+        """Fetch and validate the latest position quantity for *symbol*.
+
+        This mirrors the Manual Test Lab's explicit ``Positions`` read and is
+        intentionally separate from ``get_position_and_price``: post-fill
+        reconciliation needs the holding only and should not spend another
+        market-data request merely to prove that the position moved.
+        """
+        normalized = symbol.upper()
+        quantity = float(self._fetch_quantity(normalized))
+        if not math.isfinite(quantity) or quantity < 0:
+            raise BrokerValidationError(
+                f"Webull returned an invalid quantity for {normalized}: {quantity}"
+            )
+        return quantity
+
     @_retry()
     def has_open_order(self, symbol: str) -> bool:
         """Return whether Webull reports an active order for *symbol*.
@@ -613,9 +629,10 @@ class WebullBroker:
         order while a previously accepted order has not filled yet.
         """
         normalized = _normalize_symbol(symbol)
+        order_api = self._order_api()
         response = _response_json_or_raise(
             _call_sdk(
-                self.trade_client.order_v2.get_order_open,
+                order_api.get_order_open,
                 self.account_id,
                 page_size=OPEN_ORDER_PAGE_SIZE,
             )
@@ -630,16 +647,19 @@ class WebullBroker:
     def get_order_status(self, client_order_id: str) -> OrderStatus:
         """Read an order's real status and filled quantity from Webull.
 
-        Uses the same order-detail read the Manual Test Lab exposes
-        (``order_v2.get_order_detail``) — an idempotent read, so it is safe to
+        Uses the same order-detail read the Manual Test Lab exposes, selected
+        from the configured order API version.  This matters for Webull TH:
+        the SDK's v3 order query supports TH whereas its legacy v2 query is
+        documented for HK/US only.  The read is idempotent, so it is safe to
         retry transient 417/5xx/network errors. This is the verification the
         bot previously skipped: it distinguishes an order Webull merely
         ACCEPTED (returned an id) from one it actually FILLED, closing the gap
         that let a SELL log as submitted while the held quantity never moved.
         """
+        order_api = self._order_api()
         response = _response_json_or_raise(
             _call_sdk(
-                self.trade_client.order_v2.get_order_detail,
+                order_api.get_order_detail,
                 self.account_id,
                 client_order_id,
             )
@@ -650,6 +670,10 @@ class WebullBroker:
             _coerce_number(raw_filled, "filled quantity")
             if raw_filled not in (None, "") else 0.0
         )
+        if filled_quantity < 0:
+            raise BrokerValidationError(
+                f"Webull returned a negative filled quantity: {filled_quantity}"
+            )
         return OrderStatus(
             client_order_id=client_order_id,
             status=str(status),

@@ -44,8 +44,19 @@ from strategy import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("shannon_demon_dna")
 
-BOT_VERSION = "3.0.0"
+BOT_VERSION = "3.1.0"
 _started_at = time.time()
+
+# Webull limits Order Detail and Account Positions to two requests per two
+# seconds. Three bounded reads, spaced just over one second apart, give a
+# market order time to leave SUBMITTED and give the position snapshot time to
+# catch up without violating that documented rate limit. All reads are
+# best-effort and order placement is never repeated.
+FILL_VERIFICATION_ATTEMPTS = 3
+FILL_VERIFICATION_INTERVAL_SECONDS = 1.05
+POSITION_RECONCILIATION_ATTEMPTS = 3
+POSITION_RECONCILIATION_INTERVAL_SECONDS = 1.05
+POSITION_RECONCILIATION_EPSILON = 0.02
 
 # ---------------------------------------------------------------------------
 # DNA cache — decoded once per cold start, reused on warm starts
@@ -198,20 +209,100 @@ def _decision_payload(decision: RebalanceDecision) -> dict[str, Any]:
 
 
 def _verify_fill(broker, client_order_id: str):
-    """Best-effort read of an order's real fill state; never raises.
+    """Poll an order's real fill state on a bounded, best-effort basis.
 
     Verification is diagnostic, not part of placing the order, so a failure to
     read the order back must not fail the tick or roll back the reserved DNA
-    step. Returns an ``OrderStatus`` on success, or ``None`` when the read
-    could not be completed.
+    step. A market order commonly appears as SUBMITTED immediately after
+    placement, so one instantaneous read is not enough to distinguish "still
+    processing" from "never filled". Returns the latest ``OrderStatus`` read,
+    or ``None`` when no read could be completed.
     """
-    try:
-        return broker.get_order_status(client_order_id)
-    except BrokerError:
-        logger.warning(
-            "Could not verify fill for order %s", client_order_id, exc_info=True
+    latest = None
+    for attempt in range(1, FILL_VERIFICATION_ATTEMPTS + 1):
+        try:
+            latest = broker.get_order_status(client_order_id)
+        except Exception:
+            # SDK/network failures should already be BrokerError subclasses,
+            # but this guard keeps verification genuinely best-effort even if
+            # an unexpected response shape slips through.
+            logger.warning(
+                "Could not verify fill for order %s (attempt %d/%d)",
+                client_order_id,
+                attempt,
+                FILL_VERIFICATION_ATTEMPTS,
+                exc_info=True,
+            )
+        else:
+            if latest.is_filled or latest.is_terminal_unfilled:
+                return latest
+
+        if attempt < FILL_VERIFICATION_ATTEMPTS:
+            time.sleep(FILL_VERIFICATION_INTERVAL_SECONDS)
+
+    return latest
+
+
+def _reconcile_position(
+    broker,
+    *,
+    symbol: str,
+    side: str,
+    position_before: float,
+    filled_quantity: float,
+) -> dict[str, Any]:
+    """Read Positions until it reflects a verified fill, without raising.
+
+    This is the automated equivalent of the Manual Test Lab's second check:
+    after inspecting Order detail, read Positions and compare the actual
+    holding with the expected BUY/SELL delta. The final observed quantity is
+    returned even when the snapshot is still lagging, so the log never invents
+    a position movement.
+    """
+    normalized_side = side.strip().upper()
+    direction = 1.0 if normalized_side == "BUY" else -1.0
+    expected_after = position_before + direction * filled_quantity
+    result: dict[str, Any] = {
+        "position_before": position_before,
+        "expected_position_after": expected_after,
+        "position_after": None,
+        "position_delta": None,
+        "position_reconciled": False,
+        "position_reconcile_epsilon": POSITION_RECONCILIATION_EPSILON,
+    }
+
+    last_error: Exception | None = None
+    for attempt in range(1, POSITION_RECONCILIATION_ATTEMPTS + 1):
+        try:
+            position_after = float(broker.get_position_quantity(symbol))
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "Could not reconcile position for %s (attempt %d/%d)",
+                symbol,
+                attempt,
+                POSITION_RECONCILIATION_ATTEMPTS,
+                exc_info=True,
+            )
+        else:
+            last_error = None
+            result["position_after"] = position_after
+            result["position_delta"] = position_after - position_before
+            if abs(position_after - expected_after) <= POSITION_RECONCILIATION_EPSILON:
+                result["position_reconciled"] = True
+                return result
+
+        if attempt < POSITION_RECONCILIATION_ATTEMPTS:
+            time.sleep(POSITION_RECONCILIATION_INTERVAL_SECONDS)
+
+    if result["position_after"] is None and last_error is not None:
+        result["position_reconcile_error"] = str(last_error)[:300]
+    else:
+        result["position_reconcile_note"] = (
+            "Order detail reports a fill, but the latest Positions snapshot "
+            "has not reached the expected quantity yet"
         )
-        return None
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -335,14 +426,43 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
     fill = _verify_fill(broker, client_order_id)
     if fill is None:
         log_status = "ORDER_SUBMITTED"
+        order_log["order_detail_verified"] = False
         order_log["fill_verified"] = False
     else:
         order_log["order_status"] = fill.to_dict()
         order_log["filled_quantity"] = fill.filled_quantity
+        order_log["order_detail_verified"] = True
+        order_log["fill_verified"] = fill.is_filled
         if fill.is_filled:
             log_status = "ORDER_FILLED"
+            reconciliation = _reconcile_position(
+                broker,
+                symbol=config.symbol,
+                side=decision.side or decision.action,
+                position_before=market_state.quantity,
+                filled_quantity=fill.filled_quantity,
+            )
+            order_log.update(reconciliation)
+
+            # The existing Webull_Dashboard reads
+            # ``market_state_quantity`` as "จำนวนถือครอง (หุ้น)". Once the
+            # Manual-style Positions read succeeds, publish that latest real
+            # snapshot in the legacy field so the same order row updates on
+            # the dashboard. Preserve the decision-time snapshot separately;
+            # strategy calculations above always use this pre-order value.
+            position_after = reconciliation["position_after"]
+            if position_after is not None:
+                order_log["pre_order_market_state"] = market_state.to_dict()
+                post_order_market_state = {
+                    "quantity": position_after,
+                    "last_price": market_state.last_price,
+                }
+                order_log["post_order_market_state"] = post_order_market_state
+                order_log["quantity"] = position_after
+                order_log["market_state"] = post_order_market_state
         elif fill.is_terminal_unfilled:
             log_status = "ORDER_NOT_FILLED"
+            order_log["non_fill_verified"] = True
             order_log["not_filled_reason"] = (
                 f"Webull accepted the order but it reached status "
                 f"{fill.status!r} with 0 filled — the held quantity did not move"
@@ -350,6 +470,7 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
         else:
             # Accepted and resting (working / pending), not yet executed.
             log_status = "ORDER_SUBMITTED"
+            order_log["non_fill_verified"] = False
 
     order_log["status"] = log_status
 
@@ -368,6 +489,19 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
     # A definitive non-fill surfaces in the HTTP status too; a fill or a
     # still-working order is reported as OK.
     body_status = "OK" if log_status != "ORDER_NOT_FILLED" else "ORDER_NOT_FILLED"
+    response_observations = {
+        key: order_log[key]
+        for key in (
+            "filled_quantity",
+            "position_before",
+            "position_after",
+            "position_delta",
+            "expected_position_after",
+            "position_reconciled",
+            "sandbox_note",
+        )
+        if key in order_log
+    }
     return _ok(
         body_status,
         dna_step=dna_step,
@@ -375,10 +509,7 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
         decision=decision_data,
         order=order_result.to_dict(),
         order_log_status=log_status,
-        **({"filled_quantity": order_log["filled_quantity"]}
-           if "filled_quantity" in order_log else {}),
-        **({"sandbox_note": order_log["sandbox_note"]}
-           if "sandbox_note" in order_log else {}),
+        **response_observations,
     )
 
 

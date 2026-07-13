@@ -31,6 +31,83 @@ def _unfilled_status(client_order_id: str = "id", status: str = "CANCELLED") -> 
     )
 
 
+def _pending_status(client_order_id: str = "id") -> OrderStatus:
+    return OrderStatus(
+        client_order_id=client_order_id,
+        status="SUBMITTED",
+        filled_quantity=0.0,
+        raw_response={"status": "SUBMITTED", "filled_quantity": 0},
+    )
+
+
+def test_verify_fill_polls_pending_order_until_executed():
+    broker_instance = Mock()
+    broker_instance.get_order_status.side_effect = [
+        _pending_status(),
+        _filled_status(filled=0.5),
+    ]
+
+    with patch("main.time.sleep") as sleep:
+        result = main._verify_fill(broker_instance, "id")
+
+    assert result.is_filled is True
+    assert result.filled_quantity == 0.5
+    assert broker_instance.get_order_status.call_count == 2
+    sleep.assert_called_once_with(main.FILL_VERIFICATION_INTERVAL_SECONDS)
+
+
+def test_verify_fill_stops_after_bounded_pending_reads():
+    broker_instance = Mock()
+    broker_instance.get_order_status.return_value = _pending_status()
+
+    with patch("main.time.sleep") as sleep:
+        result = main._verify_fill(broker_instance, "id")
+
+    assert result.status == "SUBMITTED"
+    assert broker_instance.get_order_status.call_count == main.FILL_VERIFICATION_ATTEMPTS
+    assert sleep.call_count == main.FILL_VERIFICATION_ATTEMPTS - 1
+
+
+def test_position_reconciliation_waits_for_positions_snapshot_to_update():
+    broker_instance = Mock()
+    broker_instance.get_position_quantity.side_effect = [4.773, 4.273]
+
+    with patch("main.time.sleep") as sleep:
+        result = main._reconcile_position(
+            broker_instance,
+            symbol="AAPL",
+            side="SELL",
+            position_before=4.773,
+            filled_quantity=0.5,
+        )
+
+    assert result["position_before"] == 4.773
+    assert result["expected_position_after"] == pytest.approx(4.273)
+    assert result["position_after"] == 4.273
+    assert result["position_delta"] == pytest.approx(-0.5)
+    assert result["position_reconciled"] is True
+    assert broker_instance.get_position_quantity.call_count == 2
+    sleep.assert_called_once_with(main.POSITION_RECONCILIATION_INTERVAL_SECONDS)
+
+
+def test_position_reconciliation_failure_is_best_effort():
+    broker_instance = Mock()
+    broker_instance.get_position_quantity.side_effect = BrokerError("positions unavailable")
+
+    with patch("main.time.sleep"):
+        result = main._reconcile_position(
+            broker_instance,
+            symbol="AAPL",
+            side="BUY",
+            position_before=4.0,
+            filled_quantity=1.0,
+        )
+
+    assert result["position_after"] is None
+    assert result["position_reconciled"] is False
+    assert result["position_reconcile_error"] == "positions unavailable"
+
+
 @pytest.fixture
 def app():
     return Flask(__name__)
@@ -60,6 +137,8 @@ def invoke(app, **patches):
         "_get_dna_array": Mock(return_value=np.array([1, 0, 1], dtype=np.int8)),
         "reserve_step": Mock(return_value=StepReservation(0, 1)),
         "flush_trade_logs": Mock(),
+        "FILL_VERIFICATION_INTERVAL_SECONDS": 0,
+        "POSITION_RECONCILIATION_INTERVAL_SECONDS": 0,
     }
     defaults.update(patches)
     patchers = [patch.object(main, name, value) for name, value in defaults.items()]
@@ -157,6 +236,8 @@ def test_order_response_and_deterministic_client_id_are_preserved(app, app_confi
     )
     # Webull confirms the order actually executed.
     broker_instance.get_order_status.return_value = _filled_status(filled=5.0)
+    # The Manual-style Positions read confirms BUY 5 moved 5 -> 10.
+    broker_instance.get_position_quantity.return_value = 10.0
     log_trade = Mock()
 
     body, code, _ = invoke(
@@ -180,7 +261,15 @@ def test_order_response_and_deterministic_client_id_are_preserved(app, app_confi
     assert payload["status"] == "ORDER_FILLED"
     assert payload["filled_quantity"] == 5.0
     assert payload["last_price"] == 100.0
-    assert payload["quantity"] == 5.0
+    assert payload["quantity"] == 10.0
+    assert payload["market_state"] == {"quantity": 10.0, "last_price": 100.0}
+    assert payload["pre_order_market_state"] == {
+        "quantity": 5.0, "last_price": 100.0,
+    }
+    assert payload["position_before"] == 5.0
+    assert payload["position_after"] == 10.0
+    assert payload["position_delta"] == 5.0
+    assert payload["position_reconciled"] is True
     assert payload["order_result"]["order_id"] == "order-1"
     kwargs = broker_instance.place_market_order.call_args.kwargs
     assert kwargs["symbol"] == "SMR"
@@ -191,6 +280,7 @@ def test_order_response_and_deterministic_client_id_are_preserved(app, app_confi
     broker_instance.get_order_status.assert_called_once_with(
         kwargs["client_order_id"]
     )
+    broker_instance.get_position_quantity.assert_called_once_with("SMR")
 
 
 def test_accepted_but_unfilled_order_is_logged_as_not_filled(app, app_config):
@@ -358,6 +448,7 @@ def test_production_order_has_no_sandbox_note(app, app_config):
         raw_response={"order_id": "order-1"},
     )
     broker_instance.get_order_status.return_value = _filled_status(filled=5.0)
+    broker_instance.get_position_quantity.return_value = 10.0
     log_trade = Mock()
 
     body, _, _ = invoke(

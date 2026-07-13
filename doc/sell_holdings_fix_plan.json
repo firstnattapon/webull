@@ -1,16 +1,16 @@
 {
   "framework": "5-step-process",
   "language": "th",
-  "revision": "rev.4 (final) — จาก log ล่าสุด: ออร์เดอร์เศษหุ้นของบอทถูก 'รับ' (order_id + ORDER_SUBMITTED) แต่ 'ไม่ถูก fill' ตำแหน่งจึงนิ่ง; ครั้งเดียวที่ตำแหน่งขยับคือ -1.0 หุ้นเต็ม (คำสั่งมือจาก Manual Test Lab) ไม่ใช่ออร์เดอร์บอท => ต้นเหตุ = บอทวางออร์เดอร์แบบ 'blind' ไม่เคยยืนยันการ fill เหมือนที่ Manual Test Lab ทำ (Order detail/Positions)",
+  "revision": "rev.5 — ใช้ order API version เดียวกับ place (v3 สำหรับ Webull TH), poll Order detail แบบ bounded และ reconcile Positions หลัง fill เพื่ออัปเดตจำนวนถือครองในแถวเดียวกัน",
   "step_1_goals": {
     "raw_goal": "ส่ง order แล้วจำนวนถือครองไม่เปลี่ยน — แก้ไขตามแนวทาง API ของ Manual Test Lab",
-    "refined_goal": "หลัง place ทุกครั้ง ให้บอทยืนยันสถานะจริง (order detail) แล้ว log ตามความจริง: ORDER_FILLED เมื่อ fill จริง, ORDER_NOT_FILLED เมื่อรับแต่ไม่ fill, ORDER_SUBMITTED เฉพาะที่ยังค้าง — ไม่แปะ ORDER_SUBMITTED แบบตาบอดอีก",
+    "refined_goal": "หลัง place ทุกครั้ง ให้บอท poll สถานะจริงผ่าน order API ที่รองรับ Webull TH แล้วอ่าน Positions หลัง fill; log ORDER_FILLED เฉพาะ filled_quantity>0 พร้อมจำนวนถือครองหลัง order, ORDER_NOT_FILLED เมื่อ terminal+0, และ ORDER_SUBMITTED เฉพาะที่ยังค้าง",
     "target_metric": { "name": "log สะท้อนการ fill จริง + มองเห็นออร์เดอร์ที่ 'รับแต่ไม่ fill'", "current": 0, "target": 1, "unit": "สัดส่วน", "horizon": "รอบ deploy ถัดไป" },
     "success_criteria": [
-      "หลัง place บอทเรียก order_v2.get_order_detail (แบบเดียวกับ Manual Test Lab) เพื่ออ่าน status + filled_quantity",
+      "หลัง place บอทเรียก order_v3.get_order_detail สำหรับ Webull TH (flow เดียวกับ Order detail ใน Manual Test Lab) เพื่ออ่าน status + filled_quantity",
       "filled_quantity>0 => ORDER_FILLED; terminal+0 filled => ORDER_NOT_FILLED + เหตุผล; ยังค้าง => ORDER_SUBMITTED",
       "การยืนยันเป็น best-effort: อ่านไม่ได้ก็ไม่ทำให้ tick ล้ม (fill_verified=false)",
-      "รัน prod แล้ว ORDER_FILLED ตรงกับ qty ที่ลดลงจริงในแถวถัดไป"
+      "หลัง ORDER_FILLED บอทอ่าน Positions และอัปเดต market_state.quantity ในแถวเดียวกัน พร้อม position_reconciled=true เมื่อ delta ตรงภายใน epsilon"
     ]
   },
   "evidence_from_latest_log": [
@@ -44,19 +44,20 @@
     { "id": "RC_payload", "cause": "payload ต่างจาก Manual Test Lab", "reason_removed": "ตรวจแล้ว payload เหมือนกันทุกฟิลด์ (order_v3.place_order) — ไม่ใช่ต้นเหตุ" }
   ],
   "step_4_design": [
-    { "id": "S1", "targets_root_cause": "RC1", "intervention": "เพิ่ม broker.get_order_status() อ่าน order_v2.get_order_detail (API เดียวกับ Manual Test Lab) => status + filled_quantity", "expected_effect": 0.7, "cost": 0.1, "priority_score": 7.0, "rank": 1 },
-    { "id": "S2", "targets_root_cause": "RC1", "intervention": "หลัง place ที่ accepted ให้ยืนยัน fill แล้ว log ORDER_FILLED / ORDER_NOT_FILLED(+เหตุผล) / ORDER_SUBMITTED(ค้าง)", "expected_effect": 0.7, "cost": 0.1, "priority_score": 7.0, "rank": 2 },
-    { "id": "S3", "targets_root_cause": "RC1", "intervention": "ยืนยันเป็น best-effort (อ่านไม่ได้ => fill_verified=false, ไม่ล้ม tick, ไม่ roll back DNA step)", "expected_effect": 0.4, "cost": 0.05, "priority_score": 4.0, "rank": 3 },
-    { "id": "S4", "targets_root_cause": "RC2", "intervention": "แนบ filled_quantity/order_status + sandbox_note (UAT) + /health warning ให้แยกสาเหตุได้", "expected_effect": 0.5, "cost": 0.1, "priority_score": 5.0, "rank": 4 },
-    { "id": "S5", "targets_root_cause": "RC2", "intervention": "ตั้ง WEBULL_ENV=prod แล้ว deploy => ยืนยันว่า ORDER_FILLED ตรงกับ qty ที่ลดจริง", "expected_effect": 0.9, "cost": 0.15, "priority_score": 6.0, "rank": 5 }
+    { "id": "S1", "targets_root_cause": "RC1", "intervention": "ให้ get_order_status/get_order_open ใช้ configured order API; default v3 รองรับ Webull TH และตรงกับ API ที่ place", "expected_effect": 0.8, "cost": 0.1, "priority_score": 8.0, "rank": 1 },
+    { "id": "S2", "targets_root_cause": "RC1", "intervention": "หลัง place ที่ accepted ให้ poll Order detail สูงสุด 3 ครั้งตาม rate limit แล้ว log ORDER_FILLED / ORDER_NOT_FILLED / ORDER_SUBMITTED ตาม filled_quantity และสถานะจริง", "expected_effect": 0.8, "cost": 0.1, "priority_score": 8.0, "rank": 2 },
+    { "id": "S3", "targets_root_cause": "RC1", "intervention": "ยืนยันเป็น best-effort (อ่านไม่ได้ => fill_verified=false, ไม่ล้ม tick, ไม่ roll back DNA step)", "expected_effect": 0.4, "cost": 0.05, "priority_score": 4.0, "rank": 4 },
+    { "id": "S4", "targets_root_cause": "RC2", "intervention": "แนบ filled_quantity/order_status + sandbox_note (UAT) + /health warning ให้แยกสาเหตุได้", "expected_effect": 0.5, "cost": 0.1, "priority_score": 5.0, "rank": 5 },
+    { "id": "S5", "targets_root_cause": "RC2", "intervention": "ตั้ง WEBULL_ENV=prod แล้ว deploy => ยืนยันว่า ORDER_FILLED ตรงกับ qty ที่ลดจริง", "expected_effect": 0.9, "cost": 0.15, "priority_score": 6.0, "rank": 6 },
+    { "id": "S6", "targets_root_cause": "RC1", "intervention": "หลัง filled_quantity>0 ให้ poll Account Positions แบบ bounded แล้วบันทึก position_before/after/delta และอัปเดต market_state.quantity ที่ Dashboard ใช้", "expected_effect": 0.9, "cost": 0.15, "priority_score": 6.0, "rank": 3 }
   ],
   "step_5_do_it": {
     "action_plan": [
-      { "action": "broker.py: OrderStatus + get_order_status (order_v2.get_order_detail) + FILLED_QUANTITY_FIELDS/FILLED_ORDER_STATUSES", "owner": "code (PR นี้)", "start": "รอบนี้", "end": "เสร็จ", "depends_on": [] },
-      { "action": "main.py: _verify_fill + log ORDER_FILLED/ORDER_NOT_FILLED/ORDER_SUBMITTED + filled_quantity ในทั้ง log และ response", "owner": "code (PR นี้)", "start": "รอบนี้", "end": "เสร็จ", "depends_on": ["S1"] },
-      { "action": "เทสต์ 89 ผ่าน (filled=>ORDER_FILLED, accepted-unfilled=>ORDER_NOT_FILLED, verify fail=>fallback, broker parse filled_quantity)", "owner": "code (PR นี้)", "start": "รอบนี้", "end": "เสร็จ", "depends_on": ["S1","S2","S3"] },
+      { "action": "broker.py: OrderStatus + configured v3 get_order_status/get_order_open + get_position_quantity", "owner": "code (PR นี้)", "start": "รอบนี้", "end": "เสร็จ", "depends_on": [] },
+      { "action": "main.py: bounded _verify_fill + _reconcile_position + log ORDER_FILLED/ORDER_NOT_FILLED/ORDER_SUBMITTED และอัปเดตจำนวนถือครองหลัง order", "owner": "code (PR นี้)", "start": "รอบนี้", "end": "เสร็จ", "depends_on": ["S1","S6"] },
+      { "action": "เทสต์ 99 ผ่าน ครอบคลุม polling, TH v3 query, fill truth, position reconciliation และ best-effort fallback", "owner": "code (PR นี้)", "start": "รอบนี้", "end": "เสร็จ", "depends_on": ["S1","S2","S3","S6"] },
       { "action": "ตั้ง WEBULL_ENV=prod · เช็ค /health = trading_environment prod", "owner": "user", "start": "ถัดไป", "end": "TBD", "depends_on": ["S5"] },
-      { "action": "ปล่อย 1 tick => ยืนยันแถวถัดไปเป็น ORDER_FILLED และ qty ลดจริง (หรือ ORDER_NOT_FILLED พร้อมเหตุผลถ้าเศษหุ้นไม่ fill)", "owner": "user", "start": "ถัดไป", "end": "TBD", "depends_on": ["S5"] }
+      { "action": "ปล่อย 1 tick => ยืนยันแถวเดียวกันเป็น ORDER_FILLED, position_reconciled=true และ market_state.quantity ขยับจริง (หรือ ORDER_NOT_FILLED พร้อมเหตุผล)", "owner": "user", "start": "ถัดไป", "end": "TBD", "depends_on": ["S5","S6"] }
     ],
     "measurement": {
       "kpis": [
@@ -87,7 +88,7 @@
   },
   "assumptions": [
     "live test จาก environment นี้ถูกบล็อกโดย egress policy (prod และ uat ตอบ 403) จึงใช้ screenshot log/Manual Test Lab เป็นข้อมูล และทดสอบตรรกะด้วย unit test",
-    "order_v2.get_order_detail รับ (account_id, client_order_id) เหมือนที่ Manual Test Lab ใช้",
+    "order_v3.get_order_detail รับ (account_id, client_order_id) และ SDK 2.0.12 ระบุว่ารองรับ Webull TH; v2 ระบุรองรับ HK/US เท่านั้น",
     "สาเหตุที่เศษหุ้น 'รับแต่ไม่ fill' (เศษหุ้น vs UAT vs session) จะถูกแยกออกได้จาก log ORDER_NOT_FILLED + การรัน prod"
   ]
 }

@@ -244,15 +244,16 @@ def test_failed_position_read_retries_only_position_not_successful_quote():
     assert snapshot.call_count == 1
 
 
-def test_open_order_guard_uses_dashboard_account_orders_api():
+def test_open_order_guard_uses_configured_th_order_api():
     open_orders = Mock(return_value=SimpleNamespace(
         status_code=200,
         json=lambda: {"orders": [{"symbol": "SMR", "status": "SUBMITTED"}]},
     ))
     instance = broker.WebullBroker.__new__(broker.WebullBroker)
     instance.account_id = "account"
+    instance.config = SimpleNamespace(api_version="v3")
     instance.trade_client = SimpleNamespace(
-        order_v2=SimpleNamespace(get_order_open=open_orders),
+        order_v3=SimpleNamespace(get_order_open=open_orders),
     )
 
     assert instance.has_open_order("smr") is True
@@ -267,8 +268,9 @@ def _order_detail_broker(detail_payload):
     ))
     instance = broker.WebullBroker.__new__(broker.WebullBroker)
     instance.account_id = "account"
+    instance.config = SimpleNamespace(api_version="v3")
     instance.trade_client = SimpleNamespace(
-        order_v2=SimpleNamespace(get_order_detail=detail),
+        order_v3=SimpleNamespace(get_order_detail=detail),
     )
     return instance, detail
 
@@ -319,6 +321,44 @@ def test_get_order_status_missing_fill_field_defaults_to_zero():
     assert status.is_filled is False
     # Pending is neither filled nor a terminal reject.
     assert status.is_terminal_unfilled is False
+
+
+def test_filled_label_without_executed_quantity_is_not_a_verified_fill():
+    """Do not turn an inconsistent/transient detail response into a fill."""
+    instance, _ = _order_detail_broker(
+        {"status": "FILLED", "filled_quantity": "0"}
+    )
+
+    status = instance.get_order_status("coid")
+
+    assert status.is_filled is False
+    assert status.is_terminal_unfilled is False
+
+
+def test_negative_filled_quantity_is_rejected():
+    instance, _ = _order_detail_broker(
+        {"status": "FILLED", "filled_quantity": "-0.1"}
+    )
+
+    with pytest.raises(broker.BrokerValidationError, match="negative filled quantity"):
+        instance.get_order_status("coid")
+
+
+def test_get_position_quantity_reads_only_position_endpoint():
+    instance = broker.WebullBroker.__new__(broker.WebullBroker)
+    instance._fetch_quantity = Mock(return_value=4.273)
+
+    assert instance.get_position_quantity("smr") == 4.273
+    instance._fetch_quantity.assert_called_once_with("SMR")
+
+
+@pytest.mark.parametrize("quantity", [-1, float("inf"), float("nan")])
+def test_get_position_quantity_rejects_invalid_snapshot(quantity):
+    instance = broker.WebullBroker.__new__(broker.WebullBroker)
+    instance._fetch_quantity = Mock(return_value=quantity)
+
+    with pytest.raises(broker.BrokerValidationError, match="invalid quantity"):
+        instance.get_position_quantity("SMR")
 
 
 def test_place_market_order_is_submitted_once_and_never_resubmitted(fake_sdk_exceptions):
