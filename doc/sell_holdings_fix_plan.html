@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<!-- Five-Step-Planner guide — Shannon Demon DNA: SELL ที่ไม่กระทบจำนวนถือครอง -->
+<!-- Five-Step-Planner guide (rev.2) — Shannon Demon DNA: SELL ที่ไม่กระทบจำนวนถือครอง -->
 <html lang="th">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>แผนแก้ปัญหา: SELL ออกแต่จำนวนถือครองเท่าเดิม</title>
+<title>แผนแก้ (rev.2): SELL ออกแต่จำนวนถือครองเท่าเดิม</title>
 <style>
   :root{
     --bg:#faf7f2; --ink:#2b2b2b; --muted:#6f6a63;
@@ -14,14 +14,17 @@
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);
     font-family:"Sarabun","Segoe UI",system-ui,sans-serif;line-height:1.7}
-  .wrap{max-width:900px;margin:0 auto;padding:32px 20px 80px}
+  .wrap{max-width:920px;margin:0 auto;padding:32px 20px 80px}
   header{text-align:center;padding:28px 0 8px;border-bottom:2px solid var(--gold)}
-  header h1{margin:0;font-size:1.7rem;color:var(--deep);letter-spacing:.3px}
+  header h1{margin:0;font-size:1.6rem;color:var(--deep);letter-spacing:.3px}
   header p{margin:6px 0 0;color:var(--muted)}
+  .rev{display:inline-block;background:#eef2ef;color:var(--accent);border-radius:6px;padding:2px 10px;font-size:.8rem;margin-top:8px}
   .goalbar{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--gold);
     border-radius:10px;padding:16px 20px;margin:24px 0}
   .goalbar b{color:var(--deep)}
   .metric{display:inline-block;background:#f3ede2;border-radius:8px;padding:4px 10px;margin:4px 6px 0 0;font-size:.9rem}
+  .evi{background:#eef4f1;border:1px solid #cfe1d8;border-radius:10px;padding:14px 18px;margin:16px 0}
+  .evi h3{margin:0 0 6px;color:var(--accent);font-size:1rem}
   .step{margin:28px 0}
   .step h2{display:flex;align-items:center;gap:12px;font-size:1.25rem;color:var(--deep);margin:0 0 4px}
   .num{display:inline-flex;width:34px;height:34px;border-radius:50%;background:var(--gold);color:#fff;
@@ -51,69 +54,70 @@
   <header>
     <h1>ทำไม SELL ออกแล้ว “จำนวนถือครอง (หุ้น)” เท่าเดิม — แผนแก้ 5 ขั้น</h1>
     <p>Shannon Demon DNA bot · Goals → Problems → Diagnosis → Design → Do it</p>
+    <div class="rev">rev.2 · ปรับหลังหลักฐานจาก 🧪 Manual Test Lab (การส่ง order ทำงานได้)</div>
   </header>
+
+  <!-- Evidence -->
+  <div class="evi">
+    <h3>🔬 หลักฐานใหม่จาก Manual Test Lab (UAT)</h3>
+    <ul style="margin:6px 0 0;padding-left:20px;font-size:.93rem">
+      <li><b>Preview order ทำงาน</b>: SELL AAPL <code>quantity: "1"</code> (หุ้นเต็ม) → “Preview completed” + <code>estimated_cost 319.27</code> · <b>กลไกส่ง order ไม่พัง</b></li>
+      <li><b>Positions อ่านได้</b>: AAPL <code>quantity 3.77304</code> (บัญชีถือ “เศษหุ้น” จริง)</li>
+      <li>ต่างจากบอท: บอทส่ง <b>เศษหุ้น</b> เช่น <code>0.10247</code> และ <b>ข้ามขั้น preview</b> — ตัว Manual Test Lab พิสูจน์ว่าแนวทางที่ถูกคือ “preview ก่อน แล้วค่อย submit”</li>
+    </ul>
+  </div>
 
   <!-- STEP 1 -->
   <div class="goalbar">
-    <b>🎯 เป้าหมาย (Step 1):</b> ทำให้คำสั่ง SELL ที่บอทตัดสินใจ “ส่งออกจริง” และมีผลต่อจำนวนถือครองจริง —
-    และถ้าส่งไม่สำเร็จ ให้ log บอกความจริง (ORDER_REJECTED + เหตุผล) แทนที่จะรายงาน ORDER_SUBMITTED ลวงตา<br>
-    <span class="metric">ตัวชี้วัด: อัตราออร์เดอร์ที่ยืนยันเข้าตลาดจริง</span>
+    <b>🎯 เป้าหมาย (Step 1):</b> ทำให้คำสั่ง BUY/SELL ที่บอทตัดสินใจ “ส่งออกจริงและมีผลต่อจำนวนถือครอง” —
+    ถ้าส่งไม่ได้ (เช่นเศษหุ้นถูกปฏิเสธ) ให้จับได้ตั้งแต่ขั้น preview แล้ว log ความจริง (ORDER_REJECTED + เหตุผล) แทน ORDER_SUBMITTED ลวงตา<br>
+    <span class="metric">ตัวชี้วัด: อัตราออร์เดอร์ที่เข้าตลาดจริง</span>
     <span class="metric">ปัจจุบัน: 0% (SELL 3 ครั้ง qty ไม่ขยับ)</span>
     <span class="metric">เป้า: 100% ของออร์เดอร์ที่ตั้งใจ</span>
     <span class="metric">ระยะเวลา: รอบ deploy ถัดไป</span>
     <div style="margin-top:10px;font-size:.92rem;color:var(--muted)">
-      หลักฐานจาก log: qty = <code>4.77304</code> คงที่เป๊ะทั้ง step 8, 9, 10 (SELL ทั้งสาม) —
-      <code>มูลค่าพอร์ต</code> ที่เปลี่ยน (1534→1533→1532) มาจาก “ราคา” ขยับ ไม่ใช่ “จำนวนหุ้น” ขยับ
-      (4.77304 × ราคา = มูลค่าพอดีทุกแถว)
+      จาก log: qty = <code>4.77304</code> คงที่เป๊ะทั้ง step 8, 9, 10 (SELL ทั้งสาม) —
+      มูลค่าพอร์ตที่เปลี่ยนมาจาก “ราคา” ขยับ ไม่ใช่ “จำนวนหุ้น” (4.77304 × ราคา = มูลค่าพอดีทุกแถว)
     </div>
   </div>
 
   <!-- STEP 2 -->
   <div class="step">
     <h2><span class="num">2</span> Problems — ช่องว่างที่ขวางอยู่</h2>
-    <div class="card">
-      <h3>P1 — qty คงที่แม้ SELL ออก 3 ครั้ง <span class="tag hot">severity 5/5 · gap: คาดลด ~0.31 หุ้น แต่ลด 0</span></h3>
-      qty ดึงสดจาก Webull ทุก tick (<code>get_position_and_price</code>) — Webull เองรายงานตำแหน่งเดิม แปลว่าออร์เดอร์ไม่ได้ทำให้ตำแหน่งเปลี่ยน
-    </div>
-    <div class="card">
-      <h3>P2 — log บอก ORDER_SUBMITTED ทั้งที่ไม่มีออร์เดอร์จริง <span class="tag hot">severity 4/5</span></h3>
-      สถานะถูก hard-code ในโค้ด ไม่ได้ยืนยันจาก Webull — ทำให้ dashboard ดูเหมือน “ขายแล้ว” ทั้งที่ไม่มีอะไรเกิด
-    </div>
-    <div class="card">
-      <h3>P3 — ด่าน has_open_order ไม่เคยกันการยิงซ้ำ <span class="tag">severity 3/5</span></h3>
-      ถ้ามีออร์เดอร์ค้างจริง tick ถัดไปต้องได้ PASS_OPEN_ORDER แต่กลับได้ ORDER_SUBMITTED ซ้ำ → ยืนยันว่า “ไม่มีออร์เดอร์ค้าง = ไม่มีออร์เดอร์จริง”
-    </div>
-    <div class="card">
-      <h3>P4 — ไม่รู้ว่าบอทยิงเข้าสภาพแวดล้อมไหน <span class="tag hot">severity 5/5</span></h3>
-      โค้ดตั้งค่าเริ่มต้น <code>WEBULL_ENV = "uat"</code> (กล่องทราย) และ log ไม่บันทึกว่ายิงเข้า endpoint ไหน
-    </div>
+    <div class="card"><h3>P1 — qty คงที่แม้ SELL ออก 3 ครั้ง <span class="tag hot">severity 5/5</span></h3>
+      qty ดึงสดจาก Webull ทุก tick — Webull รายงานตำแหน่งเดิม แปลว่าออร์เดอร์ “ไม่ได้ทำให้ตำแหน่งเปลี่ยน”</div>
+    <div class="card"><h3>P2 — log บอก ORDER_SUBMITTED ทั้งที่ไม่มีออร์เดอร์จริง <span class="tag hot">severity 4/5</span></h3>
+      สถานะถูก hard-code ไม่ยืนยันจาก Webull ต่างจาก Manual Test Lab ที่มีขั้น preview คอยเช็ค</div>
+    <div class="card"><h3>P3 — บอทส่ง “เศษหุ้น” แต่ที่พิสูจน์แล้วว่าส่งได้คือ “หุ้นเต็ม” <span class="tag hot">severity 5/5</span></h3>
+      Manual Test Lab preview <code>1</code> หุ้นผ่าน · บอทส่ง <code>0.10247</code> — เศษหุ้นน่าจะถูกปฏิเสธ/ไม่ทำงาน</div>
+    <div class="card"><h3>P4 — บอท “ข้าม” หรือ “ไม่เช็คผล” preview <span class="tag">severity 4/5</span></h3>
+      <code>preview_orders</code> default = False และแม้เปิด ก็ไม่เอาผล preview มากั้นการ place</div>
+    <div class="card"><h3>P5 — ไม่รู้ว่าบอทยิงเข้า UAT หรือ prod <span class="tag">severity 3/5</span></h3>
+      default <code>WEBULL_ENV=uat</code> และ log ไม่บันทึก endpoint (UAT อาจไม่ขยับตำแหน่งจริง)</div>
   </div>
 
   <!-- STEP 3 -->
   <div class="step">
-    <h2><span class="num">3</span> Diagnosis — รากของปัญหา</h2>
-    <div class="card">
-      <h3>RC1 — บอทยิงเข้า UAT sandbox ไม่ใช่ production <span class="tag hot">น้ำหนัก w = 0.50</span></h3>
+    <h2><span class="num">3</span> Diagnosis — รากของปัญหา <span class="tag">ปรับน้ำหนักหลังหลักฐานใหม่</span></h2>
+    <div class="card"><h3>RC1 — ออร์เดอร์ “เศษหุ้น” ถูกปฏิเสธ/ไม่ถูกจอง <span class="tag hot">w = 0.45 ▲</span></h3>
       <ol class="why">
-        <li>ทำไม qty ไม่ขยับ? → ออร์เดอร์ไม่ได้เข้า order book จริง</li>
-        <li>ทำไมไม่เข้าจริง? → endpoint เป็น UAT (<code>th-api.uat.webullbroker.com</code>) ที่ “รับ” ออร์เดอร์แต่ตำแหน่งเป็นค่าคงที่</li>
-        <li>ทำไมเป็น UAT? → <code>config.py</code> ตั้ง default <code>WEBULL_ENV="uat"</code> ถ้าไม่ตั้ง env var จะยิงกล่องทราย</li>
+        <li>ทำไม qty ไม่ขยับ? → ออร์เดอร์ไม่เข้า order book</li>
+        <li>ทำไมไม่เข้า? → จำนวนเป็นเศษหุ้น ~0.1 · Manual Test Lab ที่ “ผ่าน” ใช้หุ้นเต็ม (1)</li>
+        <li>เศษหุ้นอาจต้องใช้ notional/มี min หรือไม่รองรับใน venue/บัญชีนี้</li>
       </ol>
-      <div style="font-size:.88rem;color:var(--muted);margin-top:6px">หลักฐาน: qty สแตติกเป๊ะ 5 ตำแหน่งทศนิยม + ORDER_SUBMITTED สำเร็จทุกครั้ง = พฤติกรรมคลาสสิกของ sandbox · <b>ต้องยืนยันด้วยค่า env จริงของ deployment</b></div>
+      <div style="font-size:.88rem;color:var(--muted);margin-top:6px">หลักฐาน: preview 1 หุ้นสำเร็จ · บอทส่ง 0.10247/0.10363/0.10777 · ยืนยันเหตุผลจริงได้จาก preview หลังเปิด gate</div>
     </div>
-    <div class="card">
-      <h3>RC2 — โค้ดตี “สำเร็จ” โดยไม่ตรวจว่ารับจริง <span class="tag">น้ำหนัก w = 0.35</span></h3>
+    <div class="card"><h3>RC2 — โค้ดตี “สำเร็จ” โดยไม่ยืนยัน + ไม่ preview-gate <span class="tag hot">w = 0.35</span></h3>
       <ol class="why">
-        <li><code>place_market_order</code> คืน OrderResult โดยไม่เช็คว่ามี order_id / สถานะไม่ใช่ reject</li>
-        <li><code>main.py</code> เขียน <code>status:"ORDER_SUBMITTED"</code> ตายตัว ไม่ว่า Webull ตอบอะไร</li>
-        <li>ผล 200 ที่ไม่มีออร์เดอร์ (reject เศษหุ้น หรือ echo ของ sandbox) เลยกลายเป็น “ส่งแล้ว” หมด</li>
+        <li><code>place_market_order</code> ไม่เช็ค order_id/สถานะ · <code>main.py</code> เขียน ORDER_SUBMITTED ตายตัว</li>
+        <li>บอทข้าม preview (default off) และไม่เอาผล preview มากั้นการส่ง</li>
+        <li>ผล: reject ที่ควรเห็นตั้งแต่ preview กลับกลายเป็น “ส่งแล้ว” ลวงตา</li>
       </ol>
     </div>
-    <div class="card">
-      <h3>RC3 — ออร์เดอร์เศษหุ้น (~0.1 หุ้น) อาจถูกปฏิเสธ upstream <span class="tag">น้ำหนัก w = 0.15</span></h3>
+    <div class="card"><h3>RC3 — มองไม่เห็น environment ที่ยิงเข้า <span class="tag">w = 0.20 ▼</span></h3>
       <ol class="why">
-        <li>จำนวนสั่ง 0.10247 / 0.10363 / 0.10777 เป็น fractional market order</li>
-        <li>บาง broker/บัญชีปฏิเสธเศษหุ้น หรือมี min — แต่ <b>พิสูจน์ไม่ได้</b> เพราะ log เดิมไม่เก็บเหตุผลจาก Webull</li>
+        <li>default UAT · UAT อาจรับ order แต่ตำแหน่งไม่ขยับ</li>
+        <li>ลดน้ำหนักลงเพราะพิสูจน์แล้วว่า “กลไกส่ง order ทำงาน” — ประเด็นหลักอยู่ที่เศษหุ้น + การยืนยันผล</li>
       </ol>
     </div>
   </div>
@@ -123,13 +127,14 @@
     <h2><span class="num">4</span> Design — มาตรการ (จัดอันดับด้วย π = Δ/c)</h2>
     <div class="scroll">
     <table>
-      <tr><th>อันดับ</th><th>มาตรการ</th><th>ยิงที่</th><th>Δ (ผลที่ปิด gap)</th><th>c (ต้นทุน)</th><th>π = Δ/c</th><th>สถานะ</th></tr>
-      <tr><td>1</td><td>ยืนยันว่า Webull “รับ” ออร์เดอร์จริง (เช็ค order_id + สถานะ) และเก็บเหตุผลเมื่อ reject</td><td>RC2</td><td>สูง</td><td>ต่ำ (โค้ด)</td><td>สูงสุด</td><td class="done">✔ ทำแล้ว</td></tr>
-      <tr><td>2</td><td>log สถานะจริง: ORDER_SUBMITTED เฉพาะเมื่อรับจริง ไม่งั้น ORDER_REJECTED + reason</td><td>RC2</td><td>สูง</td><td>ต่ำ (โค้ด)</td><td>สูง</td><td class="done">✔ ทำแล้ว</td></tr>
-      <tr><td>3</td><td>บันทึก <code>broker_environment</code>/<code>is_production</code>/endpoint ลง log ทุกออร์เดอร์</td><td>RC1</td><td>สูง</td><td>ต่ำ (โค้ด)</td><td>สูง</td><td class="done">✔ ทำแล้ว</td></tr>
-      <tr><td>4</td><td>ตั้ง <code>WEBULL_ENV=prod</code> ใน deployment (ถ้าต้องเทรดจริง) แล้วยืนยันผ่าน /health</td><td>RC1</td><td>สูงมาก</td><td>ต่ำ (config)</td><td>สูง</td><td class="todo">ผู้ใช้ต้องยืนยัน</td></tr>
-      <tr><td>5</td><td>รัน live test อ่าน order history/positions ด้วย SDK เพื่อดูเหตุผล reject จริง</td><td>RC1/RC3</td><td>สูง</td><td>สูง (egress ถูกบล็อกในนี้)</td><td>กลาง</td><td class="todo">บล็อกโดย network policy</td></tr>
-      <tr><td>6</td><td>ถ้าเศษหุ้นถูกปฏิเสธ → ปัดเป็นจำนวนเต็ม หรือใช้ notional order / เพิ่ม min-notional guard</td><td>RC3</td><td>กลาง</td><td>กลาง</td><td>กลาง</td><td class="todo">รอข้อมูลจากมาตรการ 5</td></tr>
+      <tr><th>อันดับ</th><th>มาตรการ</th><th>ยิงที่</th><th>Δ</th><th>c</th><th>π</th><th>สถานะ</th></tr>
+      <tr><td>1</td><td><b>Preview-gate</b>: preview ก่อน place · ถ้า preview บอก reject (หุ้นเศษ/ตลาดปิด) → ไม่ place, log เหตุผล (แบบ Manual Test Lab)</td><td>RC1/RC2</td><td>สูงมาก</td><td>ต่ำ</td><td>สูงสุด</td><td class="done">✔ ทำแล้ว</td></tr>
+      <tr><td>2</td><td>เปิด preview เป็น default (<code>WEBULL_PREVIEW_ORDERS=true</code>) ให้บอทเดินเส้นเดียวกับ Manual Test Lab</td><td>RC2</td><td>สูง</td><td>ต่ำ</td><td>สูง</td><td class="done">✔ ทำแล้ว</td></tr>
+      <tr><td>3</td><td>ยืนยันการรับจริง (order_id + สถานะไม่ reject) + เก็บ reason</td><td>RC2</td><td>สูง</td><td>ต่ำ</td><td>สูง</td><td class="done">✔ ทำแล้ว</td></tr>
+      <tr><td>4</td><td>log สถานะจริง (ORDER_SUBMITTED เฉพาะเมื่อ accepted / ไม่งั้น ORDER_REJECTED) + แนบ environment</td><td>RC2/RC3</td><td>สูง</td><td>ต่ำ</td><td>สูง</td><td class="done">✔ ทำแล้ว</td></tr>
+      <tr><td>5</td><td>Deploy ใหม่ · ปล่อย 1 tick · อ่าน reason จริงของเศษหุ้นจาก log</td><td>RC1</td><td>สูง</td><td>ต่ำ</td><td>สูง</td><td class="todo">ผู้ใช้</td></tr>
+      <tr><td>6</td><td>ถ้าเศษหุ้นถูกปฏิเสธจริง → เลือก: ปัดเป็นหุ้นเต็ม / ใช้ notional order / ตั้ง min-notional guard</td><td>RC1</td><td>กลาง</td><td>กลาง</td><td>กลาง</td><td class="todo">รอผลข้อ 5</td></tr>
+      <tr><td>7</td><td>ตั้ง <code>WEBULL_ENV=prod</code> ถ้าจะเทรดจริง · ยืนยันผ่าน <code>/health</code></td><td>RC3</td><td>สูง</td><td>ต่ำ</td><td>สูง</td><td class="todo">ผู้ใช้ยืนยัน</td></tr>
     </table>
     </div>
   </div>
@@ -139,41 +144,40 @@
     <h2><span class="num">5</span> Do it — ลงมือ + วัดผล</h2>
     <div class="scroll">
     <table>
-      <tr><th>การกระทำ</th><th>ผู้รับผิดชอบ</th><th>เริ่ม</th><th>จบ</th></tr>
-      <tr><td>แก้ broker.py: OrderResult มี accepted/reason + ตรวจ order_id/สถานะ</td><td>โค้ด (PR นี้)</td><td>รอบนี้</td><td class="done">เสร็จ</td></tr>
-      <tr><td>แก้ main.py: log ORDER_SUBMITTED เฉพาะเมื่อ accepted + แนบ environment</td><td>โค้ด (PR นี้)</td><td>รอบนี้</td><td class="done">เสร็จ</td></tr>
-      <tr><td>เพิ่มเทสต์ครอบ reject/no-op + env label (79 ผ่าน)</td><td>โค้ด (PR นี้)</td><td>รอบนี้</td><td class="done">เสร็จ</td></tr>
-      <tr><td>ตรวจ/ตั้ง WEBULL_ENV=prod แล้ว deploy ใหม่ · เปิด GET /health ดู endpoint</td><td>ผู้ใช้</td><td>ถัดไป</td><td class="todo">รอ</td></tr>
-      <tr><td>ปล่อยให้บอทยิง 1 tick แล้วอ่าน log แถวใหม่: ดู is_production + status จริง</td><td>ผู้ใช้</td><td>ถัดไป</td><td class="todo">รอ</td></tr>
-      <tr><td>ถ้า ORDER_REJECTED → อ่าน reason แล้วเลือกมาตรการ 6</td><td>ผู้ใช้/โค้ด</td><td>รอบวน</td><td class="todo">รอ</td></tr>
+      <tr><th>การกระทำ</th><th>ผู้รับผิดชอบ</th><th>สถานะ</th></tr>
+      <tr><td>broker.py: preview-gate (200-error body + 4xx) → ไม่ place, คืน accepted=False + reason</td><td>โค้ด (PR นี้)</td><td class="done">เสร็จ</td></tr>
+      <tr><td>config.py: preview_orders default = True</td><td>โค้ด (PR นี้)</td><td class="done">เสร็จ</td></tr>
+      <tr><td>broker/main: ยืนยัน accepted + log ORDER_SUBMITTED/ORDER_REJECTED + environment</td><td>โค้ด (PR นี้)</td><td class="done">เสร็จ</td></tr>
+      <tr><td>เทสต์ครอบ preview OK/reject-body/reject-4xx + reject/no-op + env (82 ผ่าน)</td><td>โค้ด (PR นี้)</td><td class="done">เสร็จ</td></tr>
+      <tr><td>Deploy · อ่าน log แถวใหม่: is_production + status + reason ของเศษหุ้น</td><td>ผู้ใช้</td><td class="todo">รอ</td></tr>
+      <tr><td>ตัดสินใจมาตรการ 6 (เศษหุ้น) ตาม reason จริง</td><td>ผู้ใช้/โค้ด</td><td class="todo">รอ</td></tr>
     </table>
     </div>
 
     <h3 style="color:var(--accent);margin-top:16px">สมการวัดผล &amp; ประเมินผล</h3>
     <div class="eq"><span class="lbl">Goal attainment (อัตรารับจริง)</span>A = ออร์เดอร์ที่ accepted / ออร์เดอร์ที่ตั้งใจส่ง   (เป้า A → 1)</div>
-    <div class="eq"><span class="lbl">ความสอดคล้องของตำแหน่ง</span>Δqty_actual = qty(n−1) − qty(n)  ควรใกล้  จำนวนสั่ง(SELL)</div>
+    <div class="eq"><span class="lbl">ความสอดคล้องของตำแหน่ง</span>Δqty_actual = qty(n−1) − qty(n)  ควรใกล้  จำนวนสั่ง</div>
     <div class="eq"><span class="lbl">ความจริงของ log</span>truth = #(ORDER_SUBMITTED ที่มี order_id จริง) / #(ORDER_SUBMITTED)  (เป้า = 1)</div>
 
-    <!-- CONTROL LOOP -->
     <div class="loop">
       <h3 style="margin-top:0;color:var(--warn)">🔁 Control loop — เมื่อยังไม่บรรลุเป้าหมาย</h3>
-      <div class="eq"><span class="lbl">สมการควบคุม (error)</span>e_n = Δqty_expected − Δqty_actual   (ต่อออร์เดอร์ SELL)</div>
+      <div class="eq"><span class="lbl">สมการควบคุม (error)</span>e_n = Δqty_expected − Δqty_actual</div>
       <div class="eq"><span class="lbl">อัตราการลู่เข้า</span>r_n = |e_n| / |e_(n−1)|</div>
-      <p><b>เงื่อนไขหยุด:</b> ถ้า |e_n| ≤ ε = 0.02 หุ้น → ออร์เดอร์มีผลจริง บรรลุเป้า · ถ้าไม่ → ไต่ ladder:</p>
+      <p><b>เงื่อนไขหยุด:</b> ถ้า |e_n| ≤ ε = 0.02 หุ้น → บรรลุ · ถ้าไม่ → ไต่ ladder:</p>
       <div class="scroll">
       <table class="ladder">
         <tr><th>สถานการณ์</th><th>แปลว่า</th><th>วนกลับไป</th></tr>
-        <tr><td>r_n &lt; 1 (ช่องว่างหด)</td><td>แนวทางถูก ต้องทำซ้ำ</td><td>Step 5 · deploy prod แล้ววัดอีก tick</td></tr>
-        <tr><td>r_n ≈ 1 (นิ่ง — log ยัง REJECTED)</td><td>รากปัญหาไม่ใช่ env แต่เป็นเศษหุ้น</td><td>Step 3 · ขยับน้ำหนักไป RC3 → มาตรการ 6</td></tr>
-        <tr><td>r_n &gt; 1 (แย่ลง/มี error ใหม่)</td><td>ระบุปัญหาผิด</td><td>Step 2 · อ่าน reason จาก Webull ใหม่</td></tr>
-        <tr><td>หลายรอบยังไม่ขยับ</td><td>บัญชี/สิทธิ์เทรดไม่พร้อม</td><td>Step 1 · ทบทวนว่าบัญชีนี้เทรดเศษหุ้น US ได้ไหม</td></tr>
+        <tr><td>log = ORDER_REJECTED (เศษหุ้น)</td><td>RC1 ถูก</td><td>Step 4 · ทำมาตรการ 6 (ปัด/notional)</td></tr>
+        <tr><td>ORDER_SUBMITTED แต่ qty ยังไม่ขยับ</td><td>เป็นเรื่อง env (UAT)</td><td>Step 4 · มาตรการ 7 (prod)</td></tr>
+        <tr><td>r_n &gt; 1 (แย่ลง/มี error ใหม่)</td><td>ระบุปัญหาผิด</td><td>Step 2 · อ่าน reason ใหม่</td></tr>
+        <tr><td>หลายรอบยังไม่ขยับ</td><td>บัญชี/สิทธิ์เทรดไม่พร้อม</td><td>Step 1 · ทบทวนว่าบัญชีเทรดเศษหุ้น US ได้ไหม</td></tr>
       </table>
       </div>
       <p style="font-size:.9rem;margin:8px 0 0"><b>พารามิเตอร์ลูป:</b> ε = 0.02 หุ้น · gain K = 1.0 · n_max = 5</p>
     </div>
   </div>
 
-  <footer>สร้างด้วย five-step-planner · Goals → Problems → Diagnosis → Design → Do it · บอท Shannon Demon DNA</footer>
+  <footer>สร้างด้วย five-step-planner · rev.2 · Goals → Problems → Diagnosis → Design → Do it</footer>
 </div>
 </body>
 </html>

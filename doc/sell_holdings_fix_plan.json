@@ -1,69 +1,78 @@
 {
   "framework": "5-step-process",
   "language": "th",
+  "revision": "rev.2 — ปรับหลังหลักฐานจาก Manual Test Lab (การส่ง order ทำงานได้; หุ้นเต็ม preview ผ่าน; บอทส่งเศษหุ้นและข้าม preview)",
   "step_1_goals": {
-    "raw_goal": "จาก log ทำไมจำนวนถือครอง (หุ้น) เท่าเดิม ทั้งๆ ที่ sell ออก — แก้ไข",
-    "refined_goal": "ทำให้คำสั่ง SELL ที่บอทตัดสินใจส่งออกจริงและมีผลต่อจำนวนถือครองจริง และถ้าส่งไม่สำเร็จให้ log สะท้อนความจริง (ORDER_REJECTED + เหตุผล) แทน ORDER_SUBMITTED ลวงตา",
-    "target_metric": { "name": "อัตราออร์เดอร์ที่ยืนยันเข้าตลาดจริง", "current": 0, "target": 1, "unit": "สัดส่วน", "horizon": "รอบ deploy ถัดไป" },
+    "raw_goal": "จาก log ทำไมจำนวนถือครอง (หุ้น) เท่าเดิม ทั้งๆ ที่ sell ออก — แก้ไข · ใช้ Manual Test Lab เป็นตัวอย่าง ครอบ buy/sell/pass",
+    "refined_goal": "ทำให้คำสั่ง BUY/SELL ส่งออกจริงและมีผลต่อจำนวนถือครอง และถ้าส่งไม่ได้ (เศษหุ้นถูกปฏิเสธ) ให้จับได้ตั้งแต่ preview แล้ว log ความจริง (ORDER_REJECTED + เหตุผล)",
+    "target_metric": { "name": "อัตราออร์เดอร์ที่เข้าตลาดจริง", "current": 0, "target": 1, "unit": "สัดส่วน", "horizon": "รอบ deploy ถัดไป" },
     "success_criteria": [
-      "SELL ที่ตั้งใจส่ง ทำให้ qty ที่ Webull รายงานลดลงจริง",
-      "ทุกแถว ORDER_SUBMITTED ใน log มี order_id จริงจาก Webull",
-      "ออร์เดอร์ที่ไม่ถูกรับ ถูกบันทึกเป็น ORDER_REJECTED พร้อมเหตุผล",
-      "ทุกออร์เดอร์ระบุ environment (uat/prod) และ endpoint ที่ยิงเข้า"
+      "SELL/BUY ที่ตั้งใจส่ง ทำให้ qty ที่ Webull รายงานเปลี่ยนจริง",
+      "ทุกแถว ORDER_SUBMITTED มี order_id จริงจาก Webull",
+      "ออร์เดอร์ที่ปฏิเสธถูก log เป็น ORDER_REJECTED/PREVIEW_REJECTED พร้อมเหตุผล",
+      "ทุกออร์เดอร์ระบุ environment (uat/prod) และ endpoint"
     ]
   },
+  "evidence_from_manual_test_lab": [
+    "Order Test → Preview SELL AAPL quantity '1' (หุ้นเต็ม) → 'Preview completed' estimated_cost 319.27, fee 3.42 → กลไกส่ง order ทำงาน",
+    "Account/Orders → Positions AAPL quantity 3.77304 → บัญชีถือเศษหุ้นได้",
+    "บอทส่งเศษหุ้น 0.10247/0.10363/0.10777 และ default ข้าม preview — ต่างจาก flow ที่พิสูจน์แล้วว่าได้ผล",
+    "live test จาก environment นี้ทำไม่ได้: egress policy บล็อกทั้ง api.webull.co.th (prod) และ th-api.uat.webullbroker.com (uat) ตอบ 403"
+  ],
   "step_2_problems": [
-    { "id": "P1", "description": "qty คงที่ 4.77304 เป๊ะทั้ง 3 SELL (step 8,9,10) — มูลค่าพอร์ตเปลี่ยนเพราะราคา ไม่ใช่จำนวนหุ้น", "gap_value": 0.31, "severity": 5 },
-    { "id": "P2", "description": "log แสดง ORDER_SUBMITTED โดยไม่ยืนยันจาก Webull", "gap_value": null, "severity": 4 },
-    { "id": "P3", "description": "has_open_order ไม่เคยกันการยิงซ้ำ = ไม่มีออร์เดอร์ค้างจริง", "gap_value": null, "severity": 3 },
-    { "id": "P4", "description": "ไม่ทราบว่าบอทยิงเข้า UAT หรือ prod (default WEBULL_ENV=uat) และ log ไม่บันทึก endpoint", "gap_value": null, "severity": 5 }
+    { "id": "P1", "description": "qty คงที่ 4.77304 เป๊ะทั้ง 3 SELL — มูลค่าพอร์ตเปลี่ยนเพราะราคา ไม่ใช่จำนวนหุ้น", "gap_value": 0.31, "severity": 5 },
+    { "id": "P2", "description": "log ORDER_SUBMITTED โดยไม่ยืนยันจาก Webull", "gap_value": null, "severity": 4 },
+    { "id": "P3", "description": "บอทส่งเศษหุ้น แต่ที่พิสูจน์ว่าส่งได้คือหุ้นเต็ม (Manual Test Lab)", "gap_value": null, "severity": 5 },
+    { "id": "P4", "description": "บอทข้าม/ไม่เช็คผล preview (default off, และแม้เปิดก็ไม่ gate)", "gap_value": null, "severity": 4 },
+    { "id": "P5", "description": "ไม่ทราบว่ายิงเข้า UAT หรือ prod (default uat) และ log ไม่บันทึก endpoint", "gap_value": null, "severity": 3 }
   ],
   "step_3_diagnosis": [
     {
-      "problem_id": "P1",
+      "problem_id": "P3",
       "root_causes": [
-        { "id": "RC1", "cause": "บอทยิงเข้า UAT sandbox ไม่ใช่ production — ออร์เดอร์ถูกรับแต่ตำแหน่งเป็นค่าคงที่", "why_chain": ["qty ไม่ขยับ","ออร์เดอร์ไม่เข้า order book จริง","endpoint เป็น UAT","config.py default WEBULL_ENV=uat"], "impact_weight": 0.50, "evidence": "config.py ตั้ง default 'uat'; qty สแตติกเป๊ะ 5 ตำแหน่ง; ต้องยืนยันด้วยค่า env จริงของ deployment" }
+        { "id": "RC1", "cause": "ออร์เดอร์เศษหุ้น (~0.1 หุ้น) ถูกปฏิเสธ/ไม่ถูกจอง", "why_chain": ["qty ไม่ขยับ","ออร์เดอร์ไม่เข้า order book","จำนวนเป็นเศษหุ้น ต่างจาก preview หุ้นเต็มที่ผ่าน","เศษหุ้นอาจต้อง notional/มี min/ไม่รองรับ"], "impact_weight": 0.45, "evidence": "Manual Test Lab preview 1 หุ้นผ่าน; บอทส่ง 0.10247/0.10363/0.10777" }
       ]
     },
     {
       "problem_id": "P2",
       "root_causes": [
-        { "id": "RC2", "cause": "โค้ดตี 'สำเร็จ' โดยไม่ตรวจว่า Webull รับจริง", "why_chain": ["place_market_order ไม่เช็ค order_id/สถานะ","main.py เขียน status ORDER_SUBMITTED ตายตัว","ผล 200 ที่ไม่มีออร์เดอร์กลายเป็นส่งแล้ว"], "impact_weight": 0.35, "evidence": "main.py hardcoded status; broker.py ไม่ตรวจ acceptance" }
+        { "id": "RC2", "cause": "โค้ดตี 'สำเร็จ' โดยไม่ยืนยัน และไม่ preview-gate", "why_chain": ["ไม่เช็ค order_id/สถานะ","main.py hardcoded ORDER_SUBMITTED","ข้าม preview / ไม่เอาผล preview มากั้น"], "impact_weight": 0.35, "evidence": "main.py, broker.py; Manual Test Lab preview เป็นตัวกั้นที่บอทไม่มี" }
       ]
     },
     {
-      "problem_id": "P1",
+      "problem_id": "P5",
       "root_causes": [
-        { "id": "RC3", "cause": "ออร์เดอร์เศษหุ้น (~0.1 หุ้น) อาจถูกปฏิเสธ upstream", "why_chain": ["จำนวนสั่งเป็น fractional","broker/บัญชีอาจปฏิเสธเศษหุ้นหรือมี min","log เดิมไม่เก็บเหตุผลจึงพิสูจน์ไม่ได้"], "impact_weight": 0.15, "evidence": "จำนวนสั่ง 0.10247/0.10363/0.10777; ยังไม่มีข้อมูล reject reason" }
+        { "id": "RC3", "cause": "มองไม่เห็น environment ที่ยิงเข้า (default uat อาจไม่ขยับตำแหน่ง)", "why_chain": ["default WEBULL_ENV=uat","log ไม่เก็บ endpoint"], "impact_weight": 0.20, "evidence": "config.py default uat; ลดน้ำหนักเพราะกลไกส่ง order พิสูจน์แล้วว่าทำงาน" }
       ]
     }
   ],
   "step_4_design": [
-    { "id": "S1", "targets_root_cause": "RC2", "intervention": "OrderResult มี accepted/reason และ place_market_order ตรวจ order_id + สถานะ reject", "expected_effect": 0.6, "cost": 0.1, "priority_score": 6.0, "rank": 1 },
-    { "id": "S2", "targets_root_cause": "RC2", "intervention": "main.py log ORDER_SUBMITTED เฉพาะเมื่อ accepted ไม่งั้น ORDER_REJECTED + reason", "expected_effect": 0.5, "cost": 0.1, "priority_score": 5.0, "rank": 2 },
-    { "id": "S3", "targets_root_cause": "RC1", "intervention": "บันทึก broker_environment/is_production/endpoint ลง log ทุกออร์เดอร์", "expected_effect": 0.4, "cost": 0.1, "priority_score": 4.0, "rank": 3 },
-    { "id": "S4", "targets_root_cause": "RC1", "intervention": "ตั้ง WEBULL_ENV=prod ใน deployment แล้วยืนยันผ่าน /health", "expected_effect": 0.8, "cost": 0.2, "priority_score": 4.0, "rank": 4 },
-    { "id": "S5", "targets_root_cause": "RC1", "intervention": "live test อ่าน order history/positions ด้วย SDK เพื่อดูเหตุผล reject จริง", "expected_effect": 0.5, "cost": 0.5, "priority_score": 1.0, "rank": 5 },
-    { "id": "S6", "targets_root_cause": "RC3", "intervention": "ถ้าเศษหุ้นถูกปฏิเสธ ปัดเป็นจำนวนเต็ม/ใช้ notional order/เพิ่ม min-notional guard", "expected_effect": 0.3, "cost": 0.3, "priority_score": 1.0, "rank": 6 }
+    { "id": "S1", "targets_root_cause": "RC1/RC2", "intervention": "Preview-gate: preview ก่อน place; ถ้า preview บอก reject (200-error body หรือ 4xx) ไม่ place และ log เหตุผล", "expected_effect": 0.7, "cost": 0.1, "priority_score": 7.0, "rank": 1 },
+    { "id": "S2", "targets_root_cause": "RC2", "intervention": "เปิด preview เป็น default (WEBULL_PREVIEW_ORDERS=true) ให้เดินเส้นเดียวกับ Manual Test Lab", "expected_effect": 0.5, "cost": 0.1, "priority_score": 5.0, "rank": 2 },
+    { "id": "S3", "targets_root_cause": "RC2", "intervention": "ยืนยันการรับจริง (order_id + สถานะไม่ reject) + เก็บ reason", "expected_effect": 0.5, "cost": 0.1, "priority_score": 5.0, "rank": 3 },
+    { "id": "S4", "targets_root_cause": "RC2/RC3", "intervention": "log สถานะจริง + แนบ broker_environment/endpoint/is_production", "expected_effect": 0.4, "cost": 0.1, "priority_score": 4.0, "rank": 4 },
+    { "id": "S5", "targets_root_cause": "RC1", "intervention": "Deploy แล้วอ่าน reason จริงของเศษหุ้นจาก log", "expected_effect": 0.5, "cost": 0.15, "priority_score": 3.3, "rank": 5 },
+    { "id": "S6", "targets_root_cause": "RC1", "intervention": "ถ้าเศษหุ้นถูกปฏิเสธ: ปัดเป็นหุ้นเต็ม / notional order / min-notional guard", "expected_effect": 0.3, "cost": 0.3, "priority_score": 1.0, "rank": 6 },
+    { "id": "S7", "targets_root_cause": "RC3", "intervention": "ตั้ง WEBULL_ENV=prod ถ้าจะเทรดจริง ยืนยันผ่าน /health", "expected_effect": 0.8, "cost": 0.2, "priority_score": 4.0, "rank": 7 }
   ],
   "step_5_do_it": {
     "action_plan": [
-      { "action": "แก้ broker.py: OrderResult.accepted/reason + ตรวจ acceptance", "owner": "code (PR นี้)", "start": "รอบนี้", "end": "เสร็จ", "depends_on": [] },
-      { "action": "แก้ main.py: log สถานะจริง + แนบ environment", "owner": "code (PR นี้)", "start": "รอบนี้", "end": "เสร็จ", "depends_on": ["S1"] },
-      { "action": "เพิ่มเทสต์ครอบ reject/no-op + env label", "owner": "code (PR นี้)", "start": "รอบนี้", "end": "เสร็จ (79 ผ่าน)", "depends_on": ["S1","S2","S3"] },
-      { "action": "ตรวจ/ตั้ง WEBULL_ENV=prod แล้ว deploy · เปิด /health ดู endpoint", "owner": "user", "start": "ถัดไป", "end": "TBD", "depends_on": ["S3"] },
-      { "action": "ปล่อยบอท 1 tick แล้วอ่าน log แถวใหม่: is_production + status จริง", "owner": "user", "start": "ถัดไป", "end": "TBD", "depends_on": ["S4"] },
-      { "action": "ถ้า ORDER_REJECTED อ่าน reason แล้วเลือกมาตรการ S6", "owner": "user/code", "start": "รอบวน", "end": "TBD", "depends_on": ["S5"] }
+      { "action": "broker.py: preview-gate (200-error + 4xx) → ไม่ place, accepted=False + reason", "owner": "code (PR นี้)", "start": "รอบนี้", "end": "เสร็จ", "depends_on": [] },
+      { "action": "config.py: preview_orders default True", "owner": "code (PR นี้)", "start": "รอบนี้", "end": "เสร็จ", "depends_on": [] },
+      { "action": "broker/main: ยืนยัน accepted + log สถานะจริง + environment", "owner": "code (PR นี้)", "start": "รอบนี้", "end": "เสร็จ", "depends_on": [] },
+      { "action": "เทสต์ preview OK/reject-body/reject-4xx + reject/no-op + env (82 ผ่าน)", "owner": "code (PR นี้)", "start": "รอบนี้", "end": "เสร็จ", "depends_on": ["S1","S2","S3","S4"] },
+      { "action": "Deploy · อ่าน log แถวใหม่: is_production + status + reason เศษหุ้น", "owner": "user", "start": "ถัดไป", "end": "TBD", "depends_on": ["S1"] },
+      { "action": "ตัดสินใจ S6 (เศษหุ้น) ตาม reason จริง", "owner": "user/code", "start": "รอบวน", "end": "TBD", "depends_on": ["S5"] }
     ],
     "measurement": {
       "kpis": [
         { "name": "order_accept_rate", "formula": "accepted_orders / intended_orders", "target": 1, "frequency": "ต่อ tick" },
-        { "name": "position_move_consistency", "formula": "|Δqty_actual - order_qty| <= epsilon", "target": 1, "frequency": "ต่อ SELL" },
+        { "name": "position_move_consistency", "formula": "|Δqty_actual - order_qty| <= epsilon", "target": 1, "frequency": "ต่อ order" },
         { "name": "log_truth", "formula": "#(ORDER_SUBMITTED with real order_id) / #(ORDER_SUBMITTED)", "target": 1, "frequency": "ต่อวัน" }
       ],
       "evaluation_equations": [
         { "name": "goal_attainment", "formula": "A = accepted_orders / intended_orders", "interpret": "A -> 1 คือออร์เดอร์เข้าจริงครบ" },
-        { "name": "position_delta", "formula": "Δqty_actual = qty(n-1) - qty(n)", "interpret": "ควรใกล้ order_qty ของ SELL" }
+        { "name": "position_delta", "formula": "Δqty_actual = qty(n-1) - qty(n)", "interpret": "ควรใกล้ order_qty" }
       ],
       "loop": {
         "control_equation": "e_n = Δqty_expected - Δqty_actual",
@@ -74,17 +83,17 @@
         "correction": "u_{n+1} = K * e_n",
         "n_max": 5,
         "escalation_ladder": [
-          { "if": "r_n < 1 (shrinking, not yet at epsilon)", "loop_back_to": "step_5", "action": "deploy prod แล้ววัดอีก tick" },
-          { "if": "r_n ~ 1 (stalled, log ยัง REJECTED)", "loop_back_to": "step_3", "action": "ขยับน้ำหนักไป RC3 → มาตรการ S6 (เศษหุ้น)" },
+          { "if": "log = ORDER_REJECTED (เศษหุ้น)", "loop_back_to": "step_4", "action": "ทำ S6: ปัด/notional/min-notional" },
+          { "if": "ORDER_SUBMITTED แต่ qty ยังไม่ขยับ", "loop_back_to": "step_4", "action": "ทำ S7: ตั้ง WEBULL_ENV=prod" },
           { "if": "r_n > 1 (diverging/มี error ใหม่)", "loop_back_to": "step_2", "action": "อ่าน reason จาก Webull ใหม่" },
-          { "if": "หลายรอบยังไม่ขยับ", "loop_back_to": "step_1", "action": "ทบทวนว่าบัญชีนี้เทรดเศษหุ้น US ได้ไหม" }
+          { "if": "หลายรอบยังไม่ขยับ", "loop_back_to": "step_1", "action": "ทบทวนว่าบัญชีเทรดเศษหุ้น US ได้ไหม" }
         ]
       }
     }
   },
   "assumptions": [
-    "การทดสอบ live กับ Webull API ถูกบล็อกโดย egress policy ของ environment นี้ (api.webull.co.th ตอบ 403 ผ่าน proxy) จึงยืนยัน RC1 vs RC3 จาก log+โค้ดเป็นหลัก",
-    "ยังไม่ทราบค่า WEBULL_ENV จริงของ deployment — RC1 ต้องให้ผู้ใช้ยืนยัน",
-    "gap 0.31 หุ้นของ P1 = ผลรวมโดยประมาณของ 3 คำสั่ง SELL ที่ควรลด qty แต่ไม่ลด"
+    "live test จาก environment นี้ถูกบล็อกโดย egress policy (ทั้ง prod และ uat ตอบ 403) จึงใช้ screenshot Manual Test Lab เป็นข้อมูลทดสอบ",
+    "RC1 (เศษหุ้น) จะถูกยืนยัน/ปฏิเสธเมื่ออ่าน reason จริงจาก log หลัง deploy — preview-gate ทำให้ reason นั้นปรากฏ",
+    "ยังไม่ทราบค่า WEBULL_ENV จริงของ deployment — RC3 ต้องให้ผู้ใช้ยืนยัน"
   ]
 }

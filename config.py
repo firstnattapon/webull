@@ -327,7 +327,11 @@ def _build_broker_config(project_id: str | None = None) -> BrokerConfig:
             "WEBULL_SUPPORT_TRADING_SESSION",
             "CORE",
         ).strip().upper(),
-        preview_orders=_get_bool("WEBULL_PREVIEW_ORDERS", default=False),
+        # Preview-then-place by default (the Manual Test Lab flow): the preview
+        # catches an order Webull would reject — e.g. a fractional quantity or a
+        # closed market — before a phantom "submitted" is logged. Set
+        # WEBULL_PREVIEW_ORDERS=false to place without previewing.
+        preview_orders=_get_bool("WEBULL_PREVIEW_ORDERS", default=True),
     )
 
 

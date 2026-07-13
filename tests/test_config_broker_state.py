@@ -351,6 +351,77 @@ def test_place_order_with_rejected_status_is_not_accepted():
     assert result.accepted is False
 
 
+def _preview_broker(preview_return, place_mock, *, preview_raises=None):
+    instance = broker.WebullBroker.__new__(broker.WebullBroker)
+    instance.account_id = "acct"
+    instance.config = SimpleNamespace(
+        preview_orders=True,
+        api_version="v3",
+        support_trading_session="CORE",
+    )
+    if preview_raises is not None:
+        preview = Mock(side_effect=preview_raises)
+    else:
+        preview = Mock(return_value=preview_return)
+    instance.trade_client = SimpleNamespace(
+        order_v3=SimpleNamespace(preview_order=preview, place_order=place_mock)
+    )
+    return instance, preview
+
+
+def test_preview_ok_then_order_is_placed(fake_sdk_exceptions):
+    """A preview that returns a cost estimate must proceed to placement."""
+    place = Mock(return_value=SimpleNamespace(
+        status_code=200, json=lambda: {"order_id": "order-1"}))
+    instance, preview = _preview_broker(
+        SimpleNamespace(status_code=200, json=lambda: {
+            "estimated_cost": "319.27", "estimated_transaction_fee": "3.42"}),
+        place,
+    )
+
+    result = instance.place_market_order("AAPL", "SELL", 1.0, "coid")
+
+    assert preview.call_count == 1
+    assert place.call_count == 1
+    assert result.accepted is True
+    assert result.order_id == "order-1"
+
+
+def test_preview_error_body_blocks_placement(fake_sdk_exceptions):
+    """A 200 preview with an error and no estimate must NOT place the order."""
+    place = Mock()
+    instance, preview = _preview_broker(
+        SimpleNamespace(status_code=200, json=lambda: {
+            "code": "TRADE_FRAC_NOT_SUPPORT",
+            "msg": "fractional order not supported"}),
+        place,
+    )
+
+    result = instance.place_market_order("AAPL", "SELL", 0.10247, "coid")
+
+    assert preview.call_count == 1
+    place.assert_not_called()
+    assert result.accepted is False
+    assert result.status == "PREVIEW_REJECTED"
+    assert result.reason == "fractional order not supported"
+
+
+def test_preview_http_reject_blocks_placement(fake_sdk_exceptions):
+    """A 4xx from preview means the order itself is invalid — do not place it."""
+    place = Mock()
+    instance, preview = _preview_broker(
+        None, place,
+        preview_raises=broker.BrokerHTTPError(400, "invalid quantity"),
+    )
+
+    result = instance.place_market_order("AAPL", "SELL", 0.10247, "coid")
+
+    place.assert_not_called()
+    assert result.accepted is False
+    assert result.status == "PREVIEW_REJECTED"
+    assert "invalid quantity" in result.reason
+
+
 @pytest.fixture
 def fake_sdk_exceptions(monkeypatch):
     """Install a stub ``webull.core.exception.exceptions`` module.

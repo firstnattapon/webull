@@ -57,6 +57,14 @@ ORDER_REASON_FIELDS = (
     "desc", "reason", "failure_reason", "failureReason", "code",
     "error_code", "errorCode", "failure_code", "failureCode",
 )
+# A successful preview (the Manual Test Lab's "Preview completed" path) returns
+# cost/fee estimates. Their presence is what distinguishes an acceptable order
+# from an error envelope returned under HTTP 200.
+PREVIEW_ESTIMATE_FIELDS = (
+    "estimated_cost", "estimatedCost", "estimated_amount", "estimatedAmount",
+    "estimated_transaction_fee", "estimatedTransactionFee",
+    "estimated_quantity", "estimatedQuantity", "buying_power", "buyingPower",
+)
 
 # ---------------------------------------------------------------------------
 # Exceptions
@@ -287,6 +295,37 @@ def _call_sdk(fn, /, *args, **kwargs):
         raise BrokerHTTPError(status_code, str(exc)) from exc
     except ClientException as exc:
         raise BrokerConnectionError(str(exc)) from exc
+
+
+def _preview_rejection_reason(preview_response: Any) -> str | None:
+    """Reason string if a preview response signals the order would be rejected.
+
+    Webull answers an acceptable preview with cost/fee estimates (e.g.
+    ``estimated_cost``, exactly what the Manual Test Lab shows on
+    "Preview completed") and no terminal status. A rejected order — an invalid
+    fractional quantity, a closed market, an unsellable position — comes back
+    as an error envelope even under HTTP 200. Surfacing that reason lets the
+    caller skip placement instead of logging a phantom submission.
+
+    Conservative by design: only flags a rejection on an explicit terminal
+    status, or an error message that arrives *without* any cost estimate, so a
+    normal successful preview is never mistaken for a reject.
+    """
+    if preview_response is None:
+        return None
+
+    status = _find_first_value(preview_response, *ORDER_STATUS_FIELDS, default=None)
+    if status not in (None, "") and str(status).strip().upper() in REJECTED_ORDER_STATUSES:
+        return f"preview status {status}"
+
+    has_estimate = _find_first_value(
+        preview_response, *PREVIEW_ESTIMATE_FIELDS, default=None
+    ) not in (None, "")
+    if not has_estimate:
+        reason = _find_first_value(preview_response, *ORDER_REASON_FIELDS, default=None)
+        if reason not in (None, ""):
+            return str(reason)
+    return None
 
 
 def _format_order_quantity(quantity: float) -> str:
@@ -554,9 +593,50 @@ class WebullBroker:
         )
         order_api = self._order_api()
 
+        # Preview-gate (the Manual Test Lab flow: preview, then submit only if
+        # the preview is acceptable). This is what catches an order Webull will
+        # not take — e.g. a fractional quantity or a closed market — *before* a
+        # phantom "submitted" is logged against an unchanged position.
         preview_response = None
         if self.config.preview_orders:
-            preview_response = self._preview_market_order(order_api, order_payload)
+            try:
+                preview_response = self._preview_market_order(order_api, order_payload)
+            except BrokerHTTPError as exc:
+                if exc.status_code < 500 and not _is_retryable_http(exc):
+                    _record_metric("errors")
+                    logger.warning(
+                        "Order preview rejected (not placing): side=%s qty=%s "
+                        "symbol=%s coid=%s http=%d",
+                        side, quantity, symbol, client_order_id, exc.status_code,
+                    )
+                    return OrderResult(
+                        client_order_id=client_order_id,
+                        order_id=None,
+                        status="PREVIEW_REJECTED",
+                        preview={"error": exc.body},
+                        raw_response=None,
+                        accepted=False,
+                        reason=f"preview rejected (HTTP {exc.status_code}): "
+                        f"{str(exc.body)[:300]}",
+                    )
+                raise
+            preview_reason = _preview_rejection_reason(preview_response)
+            if preview_reason is not None:
+                _record_metric("errors")
+                logger.warning(
+                    "Order preview not acceptable (not placing): side=%s qty=%s "
+                    "symbol=%s coid=%s reason=%s",
+                    side, quantity, symbol, client_order_id, preview_reason,
+                )
+                return OrderResult(
+                    client_order_id=client_order_id,
+                    order_id=None,
+                    status="PREVIEW_REJECTED",
+                    preview=preview_response,
+                    raw_response=None,
+                    accepted=False,
+                    reason=preview_reason,
+                )
 
         logger.info(
             "Placing order: side=%s qty=%s symbol=%s coid=%s",
