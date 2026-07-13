@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<!-- Five-Step-Planner guide (rev.4) — Shannon Demon DNA: SELL ที่ไม่กระทบจำนวนถือครอง -->
+<!-- Five-Step-Planner guide (rev.5) — Shannon Demon DNA: verify fill + reconcile position -->
 <html lang="th">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>แผนแก้ (final/rev.4): ส่ง order แต่จำนวนถือครองเท่าเดิม</title>
+<title>แผนแก้ (rev.5): ส่ง order และ reconcile จำนวนถือครองจริง</title>
 <style>
   :root{
     --bg:#faf7f2; --ink:#2b2b2b; --muted:#6f6a63;
@@ -56,7 +56,7 @@
   <header>
     <h1>ทำไมส่ง order แล้ว “จำนวนถือครอง (หุ้น)” เท่าเดิม — แผนแก้ (final)</h1>
     <p>Shannon Demon DNA bot · Goals → Problems → Diagnosis → Design → Do it</p>
-    <div class="rev">rev.4 (final) · จาก log ล่าสุด: ออร์เดอร์บอท “รับแต่ไม่ fill” · บอทวางออร์เดอร์แบบ blind ไม่เคยยืนยันการ fill</div>
+    <div class="rev">rev.5 · Order detail ผ่าน v3 สำหรับ Webull TH · bounded polling · reconcile Positions หลัง fill</div>
   </header>
 
   <div class="evi">
@@ -119,11 +119,12 @@
     <div class="scroll">
     <table>
       <tr><th>อันดับ</th><th>มาตรการ</th><th>ยิงที่</th><th>สถานะ</th></tr>
-      <tr><td>1</td><td><b><code>broker.get_order_status()</code></b> อ่าน <code>order_v2.get_order_detail</code> (API เดียวกับ Manual Test Lab) → <code>status</code> + <code>filled_quantity</code></td><td>RC1</td><td class="done">✔ ทำแล้ว</td></tr>
+      <tr><td>1</td><td><b><code>broker.get_order_status()</code></b> อ่าน configured <code>order_v3.get_order_detail</code> สำหรับ Webull TH → <code>status</code> + <code>filled_quantity</code></td><td>RC1</td><td class="done">✔ ทำแล้ว</td></tr>
       <tr><td>2</td><td>หลัง place ที่ accepted → ยืนยัน fill แล้ว log <b><code>ORDER_FILLED</code></b> / <b><code>ORDER_NOT_FILLED</code></b>(+เหตุผล) / <code>ORDER_SUBMITTED</code>(ค้าง)</td><td>RC1</td><td class="done">✔ ทำแล้ว</td></tr>
       <tr><td>3</td><td>ยืนยันเป็น <b>best-effort</b> (อ่านไม่ได้ → <code>fill_verified=false</code> ไม่ล้ม tick ไม่ roll back DNA step)</td><td>RC1</td><td class="done">✔ ทำแล้ว</td></tr>
       <tr><td>4</td><td>แนบ <code>filled_quantity/order_status</code> + <code>sandbox_note</code> (UAT) + <code>/health</code> warning ให้แยกสาเหตุได้</td><td>RC2</td><td class="done">✔ ทำแล้ว</td></tr>
       <tr><td>5</td><td><b>ตั้ง <code>WEBULL_ENV=prod</code></b> แล้ว deploy → ยืนยันว่า <code>ORDER_FILLED</code> ตรงกับ qty ที่ลดจริง</td><td>RC2</td><td class="todo">ผู้ใช้</td></tr>
+      <tr><td>6</td><td>หลัง fill ให้อ่าน <b>Account Positions</b> แบบ bounded → บันทึก <code>position_before/after/delta</code> และอัปเดต <code>market_state.quantity</code> ที่ Dashboard ใช้</td><td>RC1</td><td class="done">✔ ทำแล้ว</td></tr>
     </table>
     </div>
   </div>
@@ -134,11 +135,11 @@
     <div class="scroll">
     <table>
       <tr><th>การกระทำ</th><th>ผู้รับผิดชอบ</th><th>สถานะ</th></tr>
-      <tr><td>broker.py: <code>OrderStatus</code> + <code>get_order_status</code> (order_v2.get_order_detail)</td><td>โค้ด (PR นี้)</td><td class="done">เสร็จ</td></tr>
-      <tr><td>main.py: <code>_verify_fill</code> + log ORDER_FILLED/ORDER_NOT_FILLED/ORDER_SUBMITTED + filled_quantity</td><td>โค้ด (PR นี้)</td><td class="done">เสร็จ</td></tr>
-      <tr><td>เทสต์ <b>89 ผ่าน</b> (filled→FILLED, accepted-unfilled→NOT_FILLED, verify-fail→fallback, parse filled_quantity)</td><td>โค้ด (PR นี้)</td><td class="done">เสร็จ</td></tr>
+      <tr><td>broker.py: <code>OrderStatus</code> + configured v3 <code>get_order_status/get_order_open</code> + <code>get_position_quantity</code></td><td>โค้ด (PR นี้)</td><td class="done">เสร็จ</td></tr>
+      <tr><td>main.py: bounded <code>_verify_fill</code> + <code>_reconcile_position</code> + อัปเดตจำนวนถือครองหลัง order ใน log/response</td><td>โค้ด (PR นี้)</td><td class="done">เสร็จ</td></tr>
+      <tr><td>เทสต์ <b>99 ผ่าน</b> (TH v3 query, bounded polling, fill truth, Positions reconcile, best-effort fallback)</td><td>โค้ด (PR นี้)</td><td class="done">เสร็จ</td></tr>
       <tr><td>ตั้ง WEBULL_ENV=prod · เช็ค <code>/health</code> ว่า trading_environment=prod</td><td>ผู้ใช้</td><td class="todo">รอ</td></tr>
-      <tr><td>ปล่อย 1 tick → ยืนยันแถวถัดไปเป็น <code>ORDER_FILLED</code> + qty ลดจริง (หรือ <code>ORDER_NOT_FILLED</code> พร้อมเหตุผลถ้าเศษหุ้นไม่ fill)</td><td>ผู้ใช้</td><td class="todo">รอ</td></tr>
+      <tr><td>ปล่อย 1 tick → ยืนยันแถวเดียวกันเป็น <code>ORDER_FILLED</code> + <code>position_reconciled=true</code> + qty ขยับจริง (หรือ <code>ORDER_NOT_FILLED</code> พร้อมเหตุผล)</td><td>ผู้ใช้</td><td class="todo">รอ</td></tr>
     </table>
     </div>
 
@@ -162,7 +163,7 @@
     </div>
   </div>
 
-  <footer>สร้างด้วย five-step-planner · rev.4 (final) · Goals → Problems → Diagnosis → Design → Do it</footer>
+  <footer>สร้างด้วย five-step-planner · rev.5 · Goals → Problems → Diagnosis → Design → Do it</footer>
 </div>
 </body>
 </html>

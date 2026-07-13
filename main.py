@@ -3,7 +3,7 @@
 This is a slim orchestrator: all business logic lives in dedicated modules.
 The handler chains early-exit checks from cheapest to most expensive:
 
-    timestamp → market hours → DNA step → DNA signal → broker trade
+    pending order → timestamp → market hours → DNA step → DNA signal → broker trade
 
 Each exit path returns a structured JSON response with an HTTP status code.
 
@@ -19,20 +19,30 @@ Additions over v2:
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 import functions_framework
 from flask import jsonify
 
-from broker import BrokerError, get_broker, get_broker_metrics
+from broker import (
+    BrokerError,
+    OrderSubmissionUnknownError,
+    get_broker,
+    get_broker_metrics,
+)
 from config import AppConfig, load_app_config, load_broker_config, validate_startup
 from market_utils import is_us_market_open
 from state import (
+    LifecycleConflictError,
     StepReservation,
     flush_trade_logs,
+    read_pending_order,
     reserve_step,
+    write_order_lifecycle,
     write_trade_log,
 )
 from strategy import (
@@ -44,8 +54,22 @@ from strategy import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("shannon_demon_dna")
 
-BOT_VERSION = "3.0.0"
+BOT_VERSION = "4.0.0"
 _started_at = time.time()
+
+# Webull limits Order Detail and Account Positions to two requests per two
+# seconds. Three bounded reads, spaced just over one second apart, give a
+# market order time to leave SUBMITTED and give the position snapshot time to
+# catch up without violating that documented rate limit. All reads are
+# best-effort and order placement is never repeated.
+FILL_VERIFICATION_ATTEMPTS = 3
+FILL_VERIFICATION_INTERVAL_SECONDS = 1.05
+POSITION_RECONCILIATION_ATTEMPTS = 3
+POSITION_RECONCILIATION_INTERVAL_SECONDS = 1.05
+# Orders are formatted to five decimal places. Keep tolerance below the
+# smallest meaningful 0.00001-share movement so an unchanged snapshot can
+# never validate a fractional fill.
+POSITION_RECONCILIATION_EPSILON = 0.000001
 
 # ---------------------------------------------------------------------------
 # DNA cache — decoded once per cold start, reused on warm starts
@@ -166,8 +190,8 @@ def _health_response():
     }
     if not is_production:
         body["warning"] = (
-            f"trading_environment={trading_environment}: orders are accepted but "
-            "do not affect a real position; set WEBULL_ENV=prod to trade for real"
+            f"trading_environment={trading_environment}: UAT uses simulated/shared "
+            "account data and cannot prove production cash or position movement"
         )
     return jsonify(body), (200 if healthy else 503)
 
@@ -198,20 +222,351 @@ def _decision_payload(decision: RebalanceDecision) -> dict[str, Any]:
 
 
 def _verify_fill(broker, client_order_id: str):
-    """Best-effort read of an order's real fill state; never raises.
+    """Poll an order's real fill state on a bounded, best-effort basis.
 
     Verification is diagnostic, not part of placing the order, so a failure to
     read the order back must not fail the tick or roll back the reserved DNA
-    step. Returns an ``OrderStatus`` on success, or ``None`` when the read
-    could not be completed.
+    step. A market order commonly appears as SUBMITTED immediately after
+    placement, so one instantaneous read is not enough to distinguish "still
+    processing" from "never filled". Returns the latest ``OrderStatus`` read,
+    or ``None`` when no read could be completed.
     """
-    try:
-        return broker.get_order_status(client_order_id)
-    except BrokerError:
-        logger.warning(
-            "Could not verify fill for order %s", client_order_id, exc_info=True
+    latest = None
+    for attempt in range(1, FILL_VERIFICATION_ATTEMPTS + 1):
+        try:
+            latest = broker.get_order_status(client_order_id)
+        except Exception:
+            # SDK/network failures should already be BrokerError subclasses,
+            # but this guard keeps verification genuinely best-effort even if
+            # an unexpected response shape slips through.
+            logger.warning(
+                "Could not verify fill for order %s (attempt %d/%d)",
+                client_order_id,
+                attempt,
+                FILL_VERIFICATION_ATTEMPTS,
+                exc_info=True,
+            )
+        else:
+            if (
+                latest.is_filled
+                or latest.is_terminal_unfilled
+                or (latest.is_terminal and latest.has_fill)
+            ):
+                return latest
+
+        if attempt < FILL_VERIFICATION_ATTEMPTS:
+            time.sleep(FILL_VERIFICATION_INTERVAL_SECONDS)
+
+    return latest
+
+
+def _reconcile_position(
+    broker,
+    *,
+    symbol: str,
+    side: str,
+    position_before: float,
+    filled_quantity: float,
+) -> dict[str, Any]:
+    """Read Positions until it reflects a verified fill, without raising.
+
+    This is the automated equivalent of the Manual Test Lab's second check:
+    after inspecting Order detail, read Positions and compare the actual
+    holding with the expected BUY/SELL delta. The final observed quantity is
+    returned even when the snapshot is still lagging, so the log never invents
+    a position movement.
+    """
+    normalized_side = side.strip().upper()
+    direction = 1.0 if normalized_side == "BUY" else -1.0
+    expected_after = position_before + direction * filled_quantity
+    result: dict[str, Any] = {
+        "position_before": position_before,
+        "expected_position_after": expected_after,
+        "position_after": None,
+        "position_delta": None,
+        "position_reconciled": False,
+        "position_reconcile_epsilon": POSITION_RECONCILIATION_EPSILON,
+    }
+
+    last_error: Exception | None = None
+    for attempt in range(1, POSITION_RECONCILIATION_ATTEMPTS + 1):
+        try:
+            position_after = float(broker.get_position_quantity(symbol))
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "Could not reconcile position for %s (attempt %d/%d)",
+                symbol,
+                attempt,
+                POSITION_RECONCILIATION_ATTEMPTS,
+                exc_info=True,
+            )
+        else:
+            last_error = None
+            result["position_after"] = position_after
+            result["position_delta"] = position_after - position_before
+            actual_delta = position_after - position_before
+            moved_in_expected_direction = direction * actual_delta > 0
+            if (
+                moved_in_expected_direction
+                and abs(actual_delta - direction * filled_quantity)
+                <= POSITION_RECONCILIATION_EPSILON
+            ):
+                result["position_reconciled"] = True
+                return result
+
+        if attempt < POSITION_RECONCILIATION_ATTEMPTS:
+            time.sleep(POSITION_RECONCILIATION_INTERVAL_SECONDS)
+
+    if result["position_after"] is None and last_error is not None:
+        # Persist only the exception class. Even unexpected library errors may
+        # carry response bodies or signed request context in their message.
+        result["position_reconcile_error"] = last_error.__class__.__name__
+    else:
+        result["position_reconcile_note"] = (
+            "Order detail reports a fill, but the latest Positions snapshot "
+            "has not reached the expected quantity yet"
         )
+    return result
+
+
+def _pending_number(pending: dict[str, Any], name: str) -> float:
+    try:
+        value = float(pending[name])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"pending_order.{name} must be a number") from exc
+    if not math.isfinite(value):
+        raise ValueError(f"pending_order.{name} must be finite")
+    return value
+
+
+def _reconcile_pending_lifecycle(
+    config: AppConfig,
+    broker_config,
+    broker,
+    pending: dict[str, Any],
+) -> dict[str, Any]:
+    """Refresh one durable order through detail + positions.
+
+    This is the automated form of the Manual Lab sequence.  It runs on later
+    scheduler invocations until an order reaches a terminal state and at least
+    one post-order Positions snapshot is observable.  Partial fills remain
+    pending; no replacement order is submitted.
+    """
+    client_order_id = str(pending.get("client_order_id", "")).strip()
+    if not client_order_id:
+        raise ValueError("pending_order.client_order_id is required")
+
+    expected_environment = str(pending.get("broker_environment", "")).strip()
+    if not expected_environment:
+        raise BrokerError("Pending order identity is missing broker_environment")
+    if expected_environment != broker_config.environment_label:
+        raise BrokerError(
+            "Pending order environment does not match the current Webull environment"
+        )
+    expected_account = str(pending.get("account_fingerprint", "")).strip()
+    current_account = str(
+        getattr(broker_config, "account_fingerprint", "")
+    ).strip()
+    if not expected_account or not current_account:
+        raise BrokerError("Pending order identity is missing account_fingerprint")
+    if expected_account != current_account:
+        raise BrokerError(
+            "Pending order account does not match the current Webull account"
+        )
+    expected_endpoint = str(pending.get("broker_endpoint", "")).strip()
+    if not expected_endpoint:
+        raise BrokerError("Pending order identity is missing broker_endpoint")
+    if expected_endpoint != broker_config.endpoint:
+        raise BrokerError(
+            "Pending order broker_endpoint does not match the current Webull endpoint"
+        )
+
+    pending_identity = {
+        "strategy_id": str(pending.get("strategy_id", "")).strip(),
+        "symbol": str(pending.get("symbol", "")).strip().upper(),
+        "trade_collection": str(pending.get("trade_collection", "")).strip(),
+        "state_document": str(pending.get("state_document", "")).strip(),
+    }
+    runtime_identity = {
+        "strategy_id": config.strategy_id,
+        "symbol": config.symbol.upper(),
+        "trade_collection": config.firestore_trade_collection,
+        "state_document": config.firestore_state_document,
+    }
+    for identity_name, runtime_value in runtime_identity.items():
+        pending_value = pending_identity[identity_name]
+        if not pending_value:
+            raise BrokerError(
+                f"Pending order identity is missing {identity_name}"
+            )
+        if pending_value != runtime_value:
+            raise BrokerError(
+                f"Pending order {identity_name} does not match runtime configuration"
+            )
+
+    side = str(pending.get("side", "")).strip().upper()
+    if side not in {"BUY", "SELL"}:
+        raise ValueError("pending_order.side must be BUY or SELL")
+    position_before = _pending_number(pending, "position_before")
+    order_quantity = _pending_number(pending, "order_quantity")
+    last_price = _pending_number(pending, "last_price")
+    if position_before < 0:
+        raise ValueError("pending_order.position_before cannot be negative")
+    if order_quantity <= 0:
+        raise ValueError("pending_order.order_quantity must be greater than zero")
+    if last_price <= 0:
+        raise ValueError("pending_order.last_price must be greater than zero")
+
+    pending_status = str(pending.get("status", "")).strip().upper()
+    if pending_status in {
+        "ORDER_CREATED",
+        "ORDER_SUBMIT_UNKNOWN",
+        "ORDER_SUBMIT_UNKNOWN_NOT_FOUND",
+    }:
+        detail = broker.lookup_order_status(client_order_id)
+        if detail is None:
+            try:
+                not_found_attempts = int(pending.get("not_found_attempts", 0)) + 1
+            except (TypeError, ValueError):
+                not_found_attempts = 1
+            unresolved_payload = {
+                "status": "ORDER_SUBMIT_UNKNOWN_NOT_FOUND",
+                "lifecycle_outcome": "ORDER_SUBMISSION_UNRESOLVED",
+                "manual_resolution_required": True,
+                "not_found_attempts": not_found_attempts,
+                "submission_unknown_at": pending.get("submission_unknown_at"),
+                "order_id": pending.get("order_id"),
+                "side": side,
+                "order_quantity": order_quantity,
+                "filled_quantity": float(pending.get("filled_quantity", 0) or 0),
+                "position_before": position_before,
+                "last_price": last_price,
+                "broker_environment": broker_config.environment_label,
+                "broker_endpoint": broker_config.endpoint,
+                "account_fingerprint": current_account,
+            }
+            _write_lifecycle(config, client_order_id, unresolved_payload)
+            return {
+                "client_order_id": client_order_id,
+                "status": "ORDER_SUBMIT_UNKNOWN_NOT_FOUND",
+                "outcome": "ORDER_SUBMISSION_UNRESOLVED",
+                "terminal": False,
+                "filled_quantity": unresolved_payload["filled_quantity"],
+                "position_after": None,
+                "position_reconciled": False,
+                "manual_resolution_required": True,
+                "not_found_attempts": not_found_attempts,
+            }
+    else:
+        detail = broker.get_order_status(client_order_id)
+    upstream_status = detail.normalized_status or "SUBMITTED"
+    lifecycle_status = upstream_status
+    outcome = "ORDER_PENDING"
+    terminal = False
+    reconciliation: dict[str, Any] = {}
+
+    if detail.has_fill:
+        reconciliation = _reconcile_position(
+            broker,
+            symbol=config.symbol,
+            side=side,
+            position_before=position_before,
+            filled_quantity=detail.filled_quantity,
+        )
+
+    if detail.is_filled:
+        outcome = "ORDER_FILLED"
+        # A readable snapshot is not enough: it may still be the pre-fill value.
+        # Keep the deterministic lifecycle pending until the observed delta
+        # matches the exact cumulative fill.
+        terminal = reconciliation.get("position_reconciled") is True
+        lifecycle_status = (
+            "ORDER_FILLED" if terminal else "ORDER_FILLED_POSITION_PENDING"
+        )
+    elif detail.is_terminal_unfilled:
+        outcome = "ORDER_NOT_FILLED"
+        terminal = True
+        lifecycle_status = "ORDER_NOT_FILLED"
+    elif detail.is_terminal and detail.has_fill:
+        outcome = "ORDER_PARTIAL_FILLED"
+        terminal = reconciliation.get("position_reconciled") is True
+        lifecycle_status = (
+            "ORDER_PARTIAL_FILLED_TERMINAL"
+            if terminal else "ORDER_PARTIAL_POSITION_PENDING"
+        )
+    elif detail.is_partial_fill:
+        outcome = "ORDER_PARTIAL_FILLED"
+        lifecycle_status = "ORDER_PARTIAL_FILLED"
+    elif detail.is_terminal:
+        # For example FILLED with filled_quantity=0: do not clear the durable
+        # intent on an internally inconsistent response; observe it again.
+        lifecycle_status = "ORDER_STATUS_INCONSISTENT"
+    else:
+        lifecycle_status = "ORDER_SUBMITTED"
+
+    lifecycle_payload: dict[str, Any] = {
+        "status": lifecycle_status,
+        "lifecycle_outcome": outcome,
+        "order_id": pending.get("order_id"),
+        "side": side,
+        "order_quantity": order_quantity,
+        "filled_quantity": detail.filled_quantity,
+        "position_before": position_before,
+        "last_price": last_price,
+        "broker_environment": broker_config.environment_label,
+        "broker_endpoint": broker_config.endpoint,
+        "account_fingerprint": current_account,
+        "order_status": detail.to_dict(),
+        **reconciliation,
+    }
+
+    position_after = reconciliation.get("position_after")
+    if position_after is not None:
+        lifecycle_payload.update({
+            "quantity": position_after,
+            "market_state": {
+                "quantity": position_after,
+                "last_price": last_price,
+            },
+            "post_order_market_state": {
+                "quantity": position_after,
+                "last_price": last_price,
+            },
+        })
+
+    _write_lifecycle(config, client_order_id, lifecycle_payload)
+    return {
+        "client_order_id": client_order_id,
+        "status": lifecycle_status,
+        "outcome": outcome,
+        "terminal": terminal,
+        "filled_quantity": detail.filled_quantity,
+        "position_after": position_after,
+        "position_reconciled": reconciliation.get("position_reconciled"),
+    }
+
+
+def _reconcile_pending_before_signal(config: AppConfig):
+    """Resume a pending order before market/DNA gates; return a response or None."""
+    pending = read_pending_order(
+        project_id=config.project_id,
+        state_collection=config.firestore_state_collection,
+        state_document=config.firestore_state_document,
+    )
+    if pending is None:
         return None
+
+    broker_config = load_broker_config(config.project_id)
+    broker = get_broker(broker_config)
+    result = _reconcile_pending_lifecycle(
+        config,
+        broker_config,
+        broker,
+        pending,
+    )
+    body_status = "ORDER_RECONCILED" if result["terminal"] else "ORDER_PENDING"
+    return _ok(body_status, order_lifecycle=result)
 
 
 # ---------------------------------------------------------------------------
@@ -254,9 +609,9 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
         "market_state": market_state.to_dict(),
         "decision": decision_data,
         "baseline_pnl": decision.baseline_pnl,
-        # Record which environment the order is routed to. A UAT sandbox
-        # accepts orders but never moves the real position, so without this
-        # a sell logged here looks identical to a real fill that did nothing.
+        # Record which environment the order is routed to. The documented UAT
+        # account is shared/simulated, so its fills cannot be treated as proof
+        # of production cash or position movement.
         "broker_environment": broker_config.environment_label,
         "broker_endpoint": broker_config.endpoint,
         "is_production": broker_config.is_production,
@@ -293,13 +648,61 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
         config.strategy_id,
         config.symbol,
         dna_step,
+        time.time_ns(),
     )
-    order_result = broker.place_market_order(
-        symbol=config.symbol,
-        side=decision.side or decision.action,
-        quantity=decision.order_quantity,
-        client_order_id=client_order_id,
-    )
+    side = (decision.side or decision.action).upper()
+    order_log = {
+        **trade_log_base,
+        "client_order_id": client_order_id,
+        "side": side,
+        "order_quantity": decision.order_quantity,
+        "position_before": market_state.quantity,
+        "pre_order_market_state": market_state.to_dict(),
+        "account_fingerprint": str(
+            getattr(broker_config, "account_fingerprint", "")
+        ),
+    }
+
+    # Persist the intent before preview/submission.  If the process dies after
+    # Webull accepts the request, the next invocation resumes this exact
+    # client_order_id and never creates a replacement order blindly.
+    _write_lifecycle(config, client_order_id, {
+        **order_log,
+        "status": "ORDER_CREATED",
+    })
+
+    try:
+        order_result = broker.place_market_order(
+            symbol=config.symbol,
+            side=side,
+            quantity=decision.order_quantity,
+            client_order_id=client_order_id,
+        )
+    except OrderSubmissionUnknownError:
+        # A submit timeout is ambiguous. Keep the intent nonterminal so detail
+        # plus open/history can resolve it later; never resubmit automatically.
+        try:
+            _write_lifecycle(config, client_order_id, {
+                **order_log,
+                "status": "ORDER_SUBMIT_UNKNOWN",
+                "submission_unknown_at": datetime.now(timezone.utc),
+            })
+        except Exception:
+            logger.exception("Could not persist ambiguous order state")
+        raise
+    except Exception:
+        # Preview/build failed before any place call was attempted. This outcome
+        # is definitive and must clear the durable intent instead of blocking
+        # every future scheduler tick as an allegedly ambiguous submission.
+        try:
+            _write_lifecycle(config, client_order_id, {
+                **order_log,
+                "status": "ORDER_PRE_SUBMIT_FAILED",
+                "lifecycle_outcome": "ORDER_NOT_SUBMITTED",
+            })
+        except Exception:
+            logger.exception("Could not persist pre-submit failure")
+        raise
 
     # Log the real outcome. Webull can answer HTTP 200 without booking the
     # order (rejects, or a UAT sandbox echo); marking those ORDER_SUBMITTED is
@@ -308,15 +711,12 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
         order_result, "accepted", order_result.order_id is not None
     )
 
-    order_log = {
-        **trade_log_base,
-        "client_order_id": client_order_id,
-        "order_result": order_result.to_dict(),
-    }
+    order_log["order_result"] = order_result.to_dict()
+    order_log["order_id"] = order_result.order_id
 
     if not order_accepted:
         order_log["status"] = "ORDER_REJECTED"
-        _log_trade(config, order_log)
+        _write_lifecycle(config, client_order_id, order_log)
         return _ok(
             "ORDER_REJECTED",
             dna_step=dna_step,
@@ -324,6 +724,11 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
             decision=decision_data,
             order=order_result.to_dict(),
         )
+
+    _write_lifecycle(config, client_order_id, {
+        **order_log,
+        "status": "ORDER_SUBMITTED",
+    })
 
     # Accepted is NOT the same as filled. This is the crux of the reported bug:
     # a (fractional) order is accepted with a real id, logged as submitted, then
@@ -334,51 +739,135 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
     # back must never fail the tick or roll back the DNA step.
     fill = _verify_fill(broker, client_order_id)
     if fill is None:
-        log_status = "ORDER_SUBMITTED"
+        lifecycle_status = "ORDER_SUBMITTED"
+        order_log["order_detail_verified"] = False
         order_log["fill_verified"] = False
     else:
         order_log["order_status"] = fill.to_dict()
         order_log["filled_quantity"] = fill.filled_quantity
+        order_log["order_detail_verified"] = True
+        order_log["fill_verified"] = fill.is_filled
+        if fill.has_fill:
+            reconciliation = _reconcile_position(
+                broker,
+                symbol=config.symbol,
+                side=side,
+                position_before=market_state.quantity,
+                filled_quantity=fill.filled_quantity,
+            )
+            order_log.update(reconciliation)
+
+            # The existing Webull_Dashboard reads
+            # ``market_state_quantity`` as "จำนวนถือครอง (หุ้น)". Once the
+            # Manual-style Positions read succeeds, publish that latest real
+            # snapshot in the legacy field so the same order row updates on
+            # the dashboard. Preserve the decision-time snapshot separately;
+            # strategy calculations above always use this pre-order value.
+            position_after = reconciliation["position_after"]
+            if position_after is not None:
+                order_log["pre_order_market_state"] = market_state.to_dict()
+                post_order_market_state = {
+                    "quantity": position_after,
+                    "last_price": market_state.last_price,
+                }
+                order_log["post_order_market_state"] = post_order_market_state
+                order_log["quantity"] = position_after
+                order_log["market_state"] = post_order_market_state
+
         if fill.is_filled:
-            log_status = "ORDER_FILLED"
+            lifecycle_status = (
+                "ORDER_FILLED"
+                if order_log.get("position_reconciled") is True
+                else "ORDER_FILLED_POSITION_PENDING"
+            )
         elif fill.is_terminal_unfilled:
-            log_status = "ORDER_NOT_FILLED"
+            lifecycle_status = "ORDER_NOT_FILLED"
+            order_log["non_fill_verified"] = True
             order_log["not_filled_reason"] = (
                 f"Webull accepted the order but it reached status "
                 f"{fill.status!r} with 0 filled — the held quantity did not move"
             )
+        elif fill.is_terminal and fill.has_fill:
+            lifecycle_status = (
+                "ORDER_PARTIAL_FILLED_TERMINAL"
+                if order_log.get("position_reconciled") is True
+                else "ORDER_PARTIAL_POSITION_PENDING"
+            )
+            order_log["partial_fill_terminal_status"] = fill.status
+        elif fill.is_partial_fill:
+            lifecycle_status = "ORDER_PARTIAL_FILLED"
+            order_log["non_fill_verified"] = False
+        elif fill.is_terminal:
+            lifecycle_status = "ORDER_STATUS_INCONSISTENT"
         else:
             # Accepted and resting (working / pending), not yet executed.
-            log_status = "ORDER_SUBMITTED"
+            lifecycle_status = "ORDER_SUBMITTED"
+            order_log["non_fill_verified"] = False
 
-    order_log["status"] = log_status
+    order_log["status"] = lifecycle_status
 
-    # A UAT sandbox accepts orders but never fills against a real position, so
-    # an accepted (or even "filled") order there still leaves the real holding
-    # untouched. Spell that out on every non-production order so the log is
-    # unambiguous about why the quantity may not move.
+    # The documented UAT credentials are shared test data. UAT can prove the
+    # signed API contract, but its balance/position changes are not evidence of
+    # production routing and may be affected by other testers.
     if not broker_config.is_production:
         order_log["sandbox_note"] = (
-            "UAT sandbox: order accepted but the real position is not affected; "
-            "set WEBULL_ENV=prod to trade a real position"
+            "UAT shared test account: simulated balances/positions may change "
+            "concurrently and do not prove production trading"
         )
 
-    _log_trade(config, order_log)
+    _write_lifecycle(config, client_order_id, order_log)
 
     # A definitive non-fill surfaces in the HTTP status too; a fill or a
     # still-working order is reported as OK.
-    body_status = "OK" if log_status != "ORDER_NOT_FILLED" else "ORDER_NOT_FILLED"
+    body_status = (
+        "ORDER_NOT_FILLED"
+        if lifecycle_status == "ORDER_NOT_FILLED"
+        else "OK"
+    )
+    response_observations = {
+        key: order_log[key]
+        for key in (
+            "filled_quantity",
+            "position_before",
+            "position_after",
+            "position_delta",
+            "expected_position_after",
+            "position_reconciled",
+            "sandbox_note",
+        )
+        if key in order_log
+    }
     return _ok(
         body_status,
         dna_step=dna_step,
         dna_signal=current_signal,
         decision=decision_data,
         order=order_result.to_dict(),
-        order_log_status=log_status,
-        **({"filled_quantity": order_log["filled_quantity"]}
-           if "filled_quantity" in order_log else {}),
-        **({"sandbox_note": order_log["sandbox_note"]}
-           if "sandbox_note" in order_log else {}),
+        order_log_status=lifecycle_status,
+        **response_observations,
+    )
+
+
+def _write_lifecycle(
+    config: AppConfig,
+    client_order_id: str,
+    payload: dict[str, Any],
+) -> str:
+    """Durably upsert one correlated order row before returning.
+
+    Unlike ordinary PASS/error telemetry, order lifecycle state cannot be
+    fire-and-forget: a later scheduler invocation must be able to resume the
+    exact accepted/partial order without ever submitting it again.
+    """
+    return write_order_lifecycle(
+        project_id=config.project_id,
+        trade_collection=config.firestore_trade_collection,
+        state_collection=config.firestore_state_collection,
+        strategy_id=config.strategy_id,
+        symbol=config.symbol,
+        state_document=config.firestore_state_document,
+        client_order_id=client_order_id,
+        payload=payload,
     )
 
 
@@ -391,11 +880,11 @@ def rebalance_trigger(request):
     """HTTP Cloud Function — Shannon Demon DNA rebalance trigger.
 
     Early-exit chain (cheapest first):
-    1. start_timestamp — pure math, no I/O
-    2. market hours — pure math, no I/O
-    3. DNA step — 1 Firestore transaction (race-free reservation)
-    4. DNA signal — array lookup
-    5. broker trade — Webull API calls (most expensive)
+    1. pending lifecycle — one Firestore read; Webull only when an order exists
+    2. start_timestamp — pure math
+    3. market hours — pure math
+    4. DNA step — one Firestore transaction (race-free reservation)
+    5. DNA signal / broker trade
     """
     if _is_health_request(request):
         return _health_response()
@@ -406,6 +895,14 @@ def rebalance_trigger(request):
     try:
         # -- Gate 1: timestamp (zero I/O) ----------------------------------
         config = load_app_config()
+        # Durable lifecycle gate: an accepted/partial order is refreshed on
+        # every scheduler invocation, even before a future start timestamp or
+        # outside market hours. Existing risk must be observed before gates
+        # that apply only to *new* strategy actions.
+        pending_response = _reconcile_pending_before_signal(config)
+        if pending_response is not None:
+            return pending_response
+
         if time.time() < config.start_timestamp:
             return _ok(
                 "PASS_WAITING_TO_START",
@@ -447,6 +944,12 @@ def rebalance_trigger(request):
     # back here. DNA indices are trained per scheduler time slot, so the
     # pointer must advance exactly once per tick; a failed execution skips
     # its signal rather than replaying it out of its slot (see reserve_step).
+    except LifecycleConflictError:
+        logger.warning(
+            "A different order lifecycle won the concurrent intent reservation"
+        )
+        return _ok("PASS_PENDING_ORDER_RACE")
+
     except BrokerError as exc:
         logger.exception("Broker error during rebalance")
         _try_log_error(config, reserved, exc)

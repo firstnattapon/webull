@@ -53,6 +53,7 @@ def test_broker_config_resolves_thailand_uat_and_redacts_secrets(env):
     # v3 is the default order API: the SDK's v2 order endpoints support only
     # Webull HK/US, while v3 explicitly supports Webull TH (this region).
     assert loaded.api_version == "v3"
+    assert loaded.preview_orders is True
     assert loaded.safe_dict()["app_key"] == "***alue"
     assert loaded.safe_dict()["app_secret"] == "***"
     assert "app-secret-value" not in repr(loaded)
@@ -67,8 +68,69 @@ def test_startup_validation_preserves_check_names(env):
         "webull_account_id",
         "webull_endpoint",
         "webull_api_version",
+        "webull_region",
+        "webull_trading_session",
+        "webull_preview",
     }
     assert all(value.startswith("ok") for value in checks.values())
+
+
+def test_broker_config_requires_explicit_environment(env, monkeypatch):
+    monkeypatch.delenv("WEBULL_ENV")
+
+    with pytest.raises(ValueError, match="WEBULL_ENV"):
+        config.load_broker_config("project-1", use_cache=False)
+
+
+def test_broker_config_rejects_non_official_endpoint(env, monkeypatch):
+    monkeypatch.setenv("WEBULL_TRADING_ENDPOINT", "example.invalid")
+
+    with pytest.raises(ValueError, match="official endpoint"):
+        config.load_broker_config("project-1", use_cache=False)
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        ("WEBULL_REGION", "us", "WEBULL_REGION"),
+        ("WEBULL_API_VERSION", "v2", "WEBULL_API_VERSION"),
+        ("WEBULL_SUPPORT_TRADING_SESSION", "INVALID", "TRADING_SESSION"),
+        ("WEBULL_PREVIEW_ORDERS", "false", "PREVIEW_ORDERS"),
+    ],
+)
+def test_broker_config_fails_closed_on_non_manual_routing(
+    env, monkeypatch, name, value, message
+):
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValueError, match=message):
+        config.load_broker_config("project-1", use_cache=False)
+
+
+@pytest.mark.parametrize("session", ["CORE", "NIGHT", "ALL", "ALL_DAY"])
+def test_broker_config_accepts_exact_official_sessions(env, monkeypatch, session):
+    monkeypatch.setenv("WEBULL_SUPPORT_TRADING_SESSION", session)
+    loaded = config.load_broker_config("project-1", use_cache=False)
+    assert loaded.support_trading_session == session
+
+
+@pytest.mark.parametrize("session", ["PRE", "AFTER", "OVERNIGHT"])
+def test_broker_config_rejects_legacy_sessions(env, monkeypatch, session):
+    monkeypatch.setenv("WEBULL_SUPPORT_TRADING_SESSION", session)
+    with pytest.raises(ValueError, match="TRADING_SESSION"):
+        config.load_broker_config("project-1", use_cache=False)
+
+
+def test_get_config_never_returns_raw_credentials(env, monkeypatch):
+    monkeypatch.setattr(config, "_cached_app_config", None)
+    monkeypatch.setattr(config, "_cached_broker_config", None)
+
+    loaded = config.get_config()
+
+    serialized = repr(loaded)
+    assert env["WEBULL_APP_KEY"] not in serialized
+    assert env["WEBULL_APP_SECRET"] not in serialized
+    assert env["WEBULL_ACCOUNT_ID"] not in serialized
 
 
 def test_order_payload_contract_and_quantity_formatting():
@@ -100,11 +162,16 @@ def test_invalid_order_quantities_are_rejected(quantity):
 
 def test_nested_webull_responses_are_parsed_without_changing_shape_assumptions():
     response = {"data": {"positions": [{"ticker": "SMR", "positionQty": "4.5"}]}}
-    quote = {"data": [{"symbol": "SMR", "lastPrice": "11.25"}]}
+    quote = {"data": [{"symbol": "SMR", "price": "11.25"}]}
 
     assert broker.WebullBroker._extract_quantity(response, "SMR") == 4.5
     assert broker.WebullBroker._extract_last_price(quote, "SMR") == 11.25
     assert broker.WebullBroker._extract_quantity(response, "AAPL") == 0.0
+
+
+def test_core_quote_never_falls_back_to_stale_close():
+    quote = [{"symbol": "SMR", "close": "11.25"}]
+    assert broker.WebullBroker._extract_last_price(quote, "SMR", "CORE") == 0.0
 
 
 def test_regional_nested_position_response_preserves_symbol_quantity_pair():
@@ -152,6 +219,30 @@ def test_broker_cache_reuses_same_config_and_rebuilds_for_changed_config():
     assert first is cached
     assert second is not first
     assert len(created) == 2
+
+
+def test_broker_initialization_authenticates_and_binds_configured_account():
+    gateway = SimpleNamespace(
+        get_account_list=Mock(return_value=[{"account_id": "acct-1"}])
+    )
+    broker_config = SimpleNamespace(account_id="acct-1")
+
+    with patch("webull_api.WebullApiGateway", return_value=gateway) as factory:
+        instance = broker.WebullBroker(broker_config)
+
+    factory.assert_called_once_with(broker_config)
+    gateway.get_account_list.assert_called_once_with()
+    assert instance.gateway is gateway
+
+
+def test_broker_initialization_rejects_account_not_owned_by_credentials():
+    gateway = SimpleNamespace(
+        get_account_list=Mock(return_value=[{"account_id": "different"}])
+    )
+
+    with patch("webull_api.WebullApiGateway", return_value=gateway):
+        with pytest.raises(broker.BrokerValidationError, match="not present"):
+            broker.WebullBroker(SimpleNamespace(account_id="acct-1"))
 
 
 def test_retry_retries_5xx_but_not_4xx():
@@ -213,27 +304,17 @@ def test_retry_recovers_from_repeat_request_throttle():
 
 
 def test_failed_position_read_retries_only_position_not_successful_quote():
-    def response(status_code, payload=None, text=""):
-        return SimpleNamespace(
-            status_code=status_code,
-            text=text,
-            json=lambda: payload,
-        )
-
     position = Mock(side_effect=[
-        response(504, text="gateway timeout"),
-        response(200, [{"symbol": "SMR", "quantity": "10"}]),
+        broker.BrokerHTTPError(504, "gateway timeout"),
+        [{"symbol": "SMR", "quantity": "10"}],
     ])
-    snapshot = Mock(return_value=response(
-        200, {"symbol": "SMR", "last_price": "150"}
-    ))
+    snapshot = Mock(return_value={"symbol": "SMR", "price": "150"})
     instance = broker.WebullBroker.__new__(broker.WebullBroker)
     instance.account_id = "account"
-    instance.trade_client = SimpleNamespace(
-        account_v2=SimpleNamespace(get_account_position=position),
-    )
-    instance.data_client = SimpleNamespace(
-        market_data=SimpleNamespace(get_snapshot=snapshot),
+    instance.config = SimpleNamespace(support_trading_session="CORE")
+    instance.gateway = SimpleNamespace(
+        get_positions=position,
+        get_quote=snapshot,
     )
 
     with patch("broker.time.sleep"):
@@ -244,32 +325,78 @@ def test_failed_position_read_retries_only_position_not_successful_quote():
     assert snapshot.call_count == 1
 
 
-def test_open_order_guard_uses_dashboard_account_orders_api():
-    open_orders = Mock(return_value=SimpleNamespace(
-        status_code=200,
-        json=lambda: {"orders": [{"symbol": "SMR", "status": "SUBMITTED"}]},
-    ))
+def test_open_order_guard_uses_configured_th_order_api():
+    open_orders = Mock(return_value=[{
+        "client_order_id": "group-1",
+        "orders": [{
+            "symbol": "SMR",
+            "instrument_type": "EQUITY",
+            "status": "SUBMITTED",
+        }],
+    }])
     instance = broker.WebullBroker.__new__(broker.WebullBroker)
     instance.account_id = "account"
-    instance.trade_client = SimpleNamespace(
-        order_v2=SimpleNamespace(get_order_open=open_orders),
-    )
+    instance.gateway = SimpleNamespace(get_open_orders=open_orders)
 
     assert instance.has_open_order("smr") is True
     assert instance.has_open_order("AAPL") is False
-    open_orders.assert_called_with("account", page_size=100)
+    assert open_orders.call_args.kwargs == {
+        "page_size": 100,
+        "last_client_order_id": None,
+    }
+
+
+def test_open_order_guard_paginates_beyond_first_100_groups():
+    first_page = [
+        {"client_order_id": f"group-{index}", "orders": []}
+        for index in range(100)
+    ]
+    second_page = [{
+        "client_order_id": "group-final",
+        "orders": [{"symbol": "SMR", "instrument_type": "EQUITY"}],
+    }]
+    instance = broker.WebullBroker.__new__(broker.WebullBroker)
+    instance.gateway = SimpleNamespace(
+        get_open_orders=Mock(side_effect=[first_page, second_page])
+    )
+
+    assert instance.has_open_order("SMR") is True
+    assert instance.gateway.get_open_orders.call_args_list[1].kwargs == {
+        "page_size": 100,
+        "last_client_order_id": "group-99",
+    }
+
+
+def test_open_order_guard_does_not_match_option_leg_symbol():
+    instance = broker.WebullBroker.__new__(broker.WebullBroker)
+    instance.gateway = SimpleNamespace(get_open_orders=Mock(return_value=[{
+        "client_order_id": "group-1",
+        "orders": [{"symbol": "SMR", "instrument_type": "OPTION"}],
+    }]))
+
+    assert instance.has_open_order("SMR") is False
+
+
+def test_open_order_guard_accepts_official_stock_response_alias():
+    instance = broker.WebullBroker.__new__(broker.WebullBroker)
+    instance.gateway = SimpleNamespace(get_open_orders=Mock(return_value=[{
+        "client_order_id": "group-stock",
+        "orders": [{
+            "client_order_id": "stock-order",
+            "instrument_type": "STOCK",
+            "symbol": "AAPL",
+        }],
+    }]))
+
+    assert instance.has_open_order("AAPL") is True
 
 
 def _order_detail_broker(detail_payload):
-    detail = Mock(return_value=SimpleNamespace(
-        status_code=200,
-        json=lambda: detail_payload,
-    ))
+    correlated = {"client_order_id": "coid", **detail_payload}
+    detail = Mock(return_value={"orders": [correlated]})
     instance = broker.WebullBroker.__new__(broker.WebullBroker)
     instance.account_id = "account"
-    instance.trade_client = SimpleNamespace(
-        order_v2=SimpleNamespace(get_order_detail=detail),
-    )
+    instance.gateway = SimpleNamespace(get_order_detail=detail)
     return instance, detail
 
 
@@ -284,7 +411,7 @@ def test_get_order_status_reads_filled_quantity_from_order_detail():
     assert status.filled_quantity == 0.10247
     assert status.is_filled is True
     assert status.is_terminal_unfilled is False
-    detail.assert_called_once_with("account", "coid")
+    detail.assert_called_once_with("coid")
 
 
 def test_get_order_status_flags_accepted_but_cancelled_order_as_unfilled():
@@ -300,14 +427,22 @@ def test_get_order_status_flags_accepted_but_cancelled_order_as_unfilled():
     assert status.is_terminal_unfilled is True
 
 
-def test_get_order_status_treats_partial_fill_as_filled():
+def test_get_order_status_keeps_partial_fill_nonterminal():
     instance, _ = _order_detail_broker(
-        {"status": "PARTIALLY_FILLED", "filledQty": "0.5"}
+        {
+            "status": "PARTIAL_FILLED",
+            "quantity": "1",
+            "filledQty": "0.5",
+        }
     )
 
     status = instance.get_order_status("coid")
 
-    assert status.is_filled is True
+    assert status.has_fill is True
+    assert status.is_partial_fill is True
+    assert status.is_filled is False
+    assert status.is_terminal is False
+    assert status.remaining_quantity == 0.5
 
 
 def test_get_order_status_missing_fill_field_defaults_to_zero():
@@ -321,26 +456,125 @@ def test_get_order_status_missing_fill_field_defaults_to_zero():
     assert status.is_terminal_unfilled is False
 
 
-def test_place_market_order_is_submitted_once_and_never_resubmitted(fake_sdk_exceptions):
+def test_get_order_status_requires_one_official_detail_group_object():
+    instance = broker.WebullBroker.__new__(broker.WebullBroker)
+    instance.gateway = SimpleNamespace(get_order_detail=Mock(return_value=[{
+        "client_order_id": "coid",
+        "orders": [{"client_order_id": "coid", "status": "FILLED"}],
+    }]))
+
+    with pytest.raises(
+        broker.BrokerValidationError,
+        match="one group object",
+    ):
+        instance.get_order_status("coid")
+
+
+def test_cancel_correlates_flat_response_and_confirms_detail():
+    instance = broker.WebullBroker.__new__(broker.WebullBroker)
+    instance.gateway = SimpleNamespace(cancel_order=Mock(return_value={
+        "client_order_id": "coid",
+        "order_id": "order-1",
+    }))
+    instance.get_order_status = Mock(return_value=broker.OrderStatus(
+        client_order_id="coid",
+        status="CANCELLED",
+        filled_quantity=0.0,
+        raw_response={},
+    ))
+
+    result = instance.cancel_order("coid")
+
+    assert result == {
+        "client_order_id": "coid",
+        "order_id": "order-1",
+        "status": "CANCELLED",
+        "filled_quantity": 0.0,
+    }
+    instance.gateway.cancel_order.assert_called_once_with("coid")
+    instance.get_order_status.assert_called_once_with("coid")
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {},
+        {"client_order_id": "other", "order_id": "order-1"},
+        {"client_order_id": "coid", "order_id": 1},
+    ],
+)
+def test_cancel_malformed_or_mismatched_response_is_ambiguous(response):
+    instance = broker.WebullBroker.__new__(broker.WebullBroker)
+    instance.gateway = SimpleNamespace(cancel_order=Mock(return_value=response))
+    instance.get_order_status = Mock()
+
+    with pytest.raises(broker.OrderCancellationUnknownError):
+        instance.cancel_order("coid")
+
+    instance.gateway.cancel_order.assert_called_once_with("coid")
+    instance.get_order_status.assert_not_called()
+
+
+def test_filled_label_without_executed_quantity_is_not_a_verified_fill():
+    """Do not turn an inconsistent/transient detail response into a fill."""
+    instance, _ = _order_detail_broker(
+        {"status": "FILLED", "filled_quantity": "0"}
+    )
+
+    status = instance.get_order_status("coid")
+
+    assert status.is_filled is False
+    assert status.is_terminal_unfilled is False
+
+
+def test_negative_filled_quantity_is_rejected():
+    instance, _ = _order_detail_broker(
+        {"status": "FILLED", "filled_quantity": "-0.1"}
+    )
+
+    with pytest.raises(broker.BrokerValidationError, match="negative filled quantity"):
+        instance.get_order_status("coid")
+
+
+def test_get_position_quantity_reads_only_position_endpoint():
+    instance = broker.WebullBroker.__new__(broker.WebullBroker)
+    instance._fetch_quantity = Mock(return_value=4.273)
+
+    assert instance.get_position_quantity("smr") == 4.273
+    instance._fetch_quantity.assert_called_once_with("SMR")
+
+
+@pytest.mark.parametrize("quantity", [-1, float("inf"), float("nan")])
+def test_get_position_quantity_rejects_invalid_snapshot(quantity):
+    instance = broker.WebullBroker.__new__(broker.WebullBroker)
+    instance._fetch_quantity = Mock(return_value=quantity)
+
+    with pytest.raises(broker.BrokerValidationError, match="invalid quantity"):
+        instance.get_position_quantity("SMR")
+
+
+def test_place_market_order_is_submitted_once_and_never_resubmitted():
     """Order placement must not retry: a resubmit trips 417 / risks a dup fill."""
     instance = broker.WebullBroker.__new__(broker.WebullBroker)
     instance.account_id = "acct"
     instance.config = SimpleNamespace(
-        preview_orders=False,
-        api_version="v3",
         support_trading_session="CORE",
     )
     # A 504 on the submit is ambiguous — the order may already have landed.
-    place = Mock(return_value=SimpleNamespace(status_code=504, text="gateway timeout"))
-    instance.trade_client = SimpleNamespace(
-        order_v3=SimpleNamespace(place_order=place)
+    preview = Mock(return_value={
+        "estimated_cost": "10",
+        "estimated_transaction_fee": "0",
+    })
+    place = Mock(side_effect=broker.BrokerHTTPError(504, "gateway timeout"))
+    instance.gateway = SimpleNamespace(
+        preview_market_order=preview,
+        place_market_order=place,
     )
 
     with patch("broker.time.sleep") as sleep:
-        with pytest.raises(broker.BrokerHTTPError) as excinfo:
+        with pytest.raises(broker.OrderSubmissionUnknownError):
             instance.place_market_order("SMR", "BUY", 1.0, "coid")
 
-    assert excinfo.value.status_code == 504
     assert place.call_count == 1   # submitted exactly once
     sleep.assert_not_called()      # no retry/backoff on the order path
 
@@ -349,16 +583,18 @@ def test_order_with_id_defaults_to_submitted_instead_of_unknown():
     instance = broker.WebullBroker.__new__(broker.WebullBroker)
     instance.account_id = "acct"
     instance.config = SimpleNamespace(
-        preview_orders=False,
-        api_version="v3",
         support_trading_session="CORE",
     )
-    place = Mock(return_value=SimpleNamespace(
-        status_code=200,
-        json=lambda: {"order_id": "order-1"},
-    ))
-    instance.trade_client = SimpleNamespace(
-        order_v3=SimpleNamespace(place_order=place),
+    place = Mock(return_value={
+        "client_order_id": "coid",
+        "order_id": "order-1",
+    })
+    instance.gateway = SimpleNamespace(
+        preview_market_order=Mock(return_value={
+            "estimated_cost": "10",
+            "estimated_transaction_fee": "0",
+        }),
+        place_market_order=place,
     )
 
     result = instance.place_market_order("SMR", "BUY", 1.0, "coid")
@@ -369,41 +605,62 @@ def test_order_with_id_defaults_to_submitted_instead_of_unknown():
     assert result.reason is None
 
 
+@pytest.mark.parametrize(
+    "place_response",
+    [
+        {},
+        {"client_order_id": "COID", "order_id": "order-1"},
+        {"client_order_id": "coid", "order_id": ""},
+        {"client_order_id": "coid", "order_id": 123},
+        {"orders": [{"client_order_id": "coid", "order_id": "nested"}]},
+    ],
+)
+def test_place_response_must_be_exact_flat_string_contract(place_response):
+    instance = _order_broker(place_response)
+    with pytest.raises(broker.OrderSubmissionUnknownError):
+        instance.place_market_order("SMR", "BUY", 1.0, "coid")
+
+
 def _order_broker(place_return):
     instance = broker.WebullBroker.__new__(broker.WebullBroker)
     instance.account_id = "acct"
     instance.config = SimpleNamespace(
-        preview_orders=False,
-        api_version="v3",
         support_trading_session="CORE",
     )
     place = Mock(return_value=place_return)
-    instance.trade_client = SimpleNamespace(
-        order_v3=SimpleNamespace(place_order=place),
+    instance.gateway = SimpleNamespace(
+        preview_market_order=Mock(return_value={
+            "estimated_cost": "10",
+            "estimated_transaction_fee": "0",
+        }),
+        place_market_order=place,
     )
     return instance
 
 
 def test_place_order_without_id_is_not_accepted():
     """A 200 body with no order id means no live order — must not be 'accepted'."""
-    instance = _order_broker(SimpleNamespace(
-        status_code=200,
-        json=lambda: {"msg": "fractional order not supported", "code": "INVALID"},
-    ))
+    instance = _order_broker({
+        "client_order_id": "coid",
+        "status": "REJECTED",
+        "msg": "fractional order not supported",
+        "code": "INVALID",
+    })
 
     result = instance.place_market_order("SMR", "SELL", 0.1, "coid")
 
     assert result.order_id is None
     assert result.accepted is False
-    assert result.reason == "fractional order not supported"
+    assert result.reason == "Webull rejected the correlated order"
 
 
 def test_place_order_with_rejected_status_is_not_accepted():
     """An id but a terminal-reject status still means the order never booked."""
-    instance = _order_broker(SimpleNamespace(
-        status_code=200,
-        json=lambda: {"order_id": "order-9", "status": "REJECTED"},
-    ))
+    instance = _order_broker({
+        "client_order_id": "coid",
+        "order_id": "order-9",
+        "status": "REJECTED",
+    })
 
     result = instance.place_market_order("SMR", "SELL", 0.1, "coid")
 
@@ -416,27 +673,27 @@ def _preview_broker(preview_return, place_mock, *, preview_raises=None):
     instance = broker.WebullBroker.__new__(broker.WebullBroker)
     instance.account_id = "acct"
     instance.config = SimpleNamespace(
-        preview_orders=True,
-        api_version="v3",
         support_trading_session="CORE",
     )
     if preview_raises is not None:
         preview = Mock(side_effect=preview_raises)
     else:
         preview = Mock(return_value=preview_return)
-    instance.trade_client = SimpleNamespace(
-        order_v3=SimpleNamespace(preview_order=preview, place_order=place_mock)
+    instance.gateway = SimpleNamespace(
+        preview_market_order=preview,
+        place_market_order=place_mock,
     )
     return instance, preview
 
 
-def test_preview_ok_then_order_is_placed(fake_sdk_exceptions):
+def test_preview_ok_then_order_is_placed():
     """A preview that returns a cost estimate must proceed to placement."""
-    place = Mock(return_value=SimpleNamespace(
-        status_code=200, json=lambda: {"order_id": "order-1"}))
+    place = Mock(return_value={
+        "client_order_id": "coid",
+        "order_id": "order-1",
+    })
     instance, preview = _preview_broker(
-        SimpleNamespace(status_code=200, json=lambda: {
-            "estimated_cost": "319.27", "estimated_transaction_fee": "3.42"}),
+        {"estimated_cost": "319.27", "estimated_transaction_fee": "3.42"},
         place,
     )
 
@@ -448,13 +705,14 @@ def test_preview_ok_then_order_is_placed(fake_sdk_exceptions):
     assert result.order_id == "order-1"
 
 
-def test_preview_error_body_blocks_placement(fake_sdk_exceptions):
+def test_preview_error_body_blocks_placement():
     """A 200 preview with an error and no estimate must NOT place the order."""
     place = Mock()
     instance, preview = _preview_broker(
-        SimpleNamespace(status_code=200, json=lambda: {
+        {
             "code": "TRADE_FRAC_NOT_SUPPORT",
-            "msg": "fractional order not supported"}),
+            "msg": "fractional order not supported",
+        },
         place,
     )
 
@@ -464,10 +722,45 @@ def test_preview_error_body_blocks_placement(fake_sdk_exceptions):
     place.assert_not_called()
     assert result.accepted is False
     assert result.status == "PREVIEW_REJECTED"
-    assert result.reason == "fractional order not supported"
+    assert result.reason == (
+        "preview rejected (TRADE_FRAC_NOT_SUPPORT): fractional order not supported"
+    )
 
 
-def test_preview_http_reject_blocks_placement(fake_sdk_exceptions):
+@pytest.mark.parametrize(
+    "preview_response",
+    [
+        {},
+        [],
+        {"estimated_cost": "10"},
+        {"estimated_transaction_fee": "1"},
+        {"estimated_cost": 10, "estimated_transaction_fee": "1"},
+        {"estimated_cost": "10", "estimated_transaction_fee": 1},
+        {"estimatedCost": "10", "estimatedTransactionFee": "1"},
+        {
+            "estimated_cost": "10",
+            "estimatedTransactionFee": "1",
+        },
+        {
+            "nested": {
+                "estimated_cost": "10",
+                "estimated_transaction_fee": "1",
+            }
+        },
+    ],
+)
+def test_preview_requires_exact_top_level_string_estimates(preview_response):
+    place = Mock()
+    instance, _ = _preview_broker(preview_response, place)
+
+    result = instance.place_market_order("AAPL", "BUY", 1.0, "coid")
+
+    assert result.accepted is False
+    assert result.status == "PREVIEW_REJECTED"
+    place.assert_not_called()
+
+
+def test_preview_http_reject_blocks_placement():
     """A 4xx from preview means the order itself is invalid — do not place it."""
     place = Mock()
     instance, preview = _preview_broker(
@@ -480,110 +773,7 @@ def test_preview_http_reject_blocks_placement(fake_sdk_exceptions):
     place.assert_not_called()
     assert result.accepted is False
     assert result.status == "PREVIEW_REJECTED"
-    assert "invalid quantity" in result.reason
-
-
-@pytest.fixture
-def fake_sdk_exceptions(monkeypatch):
-    """Install a stub ``webull.core.exception.exceptions`` module.
-
-    Mirrors the real SDK: ``ServerException`` carries ``http_status`` and is a
-    plain ``Exception`` (NOT a broker error), which is exactly why untranslated
-    SDK errors used to bypass retry and surface as generic 500s.
-    """
-    import sys
-    from types import ModuleType
-
-    class ServerException(Exception):
-        def __init__(self, code, msg="", http_status=None, request_id=None):
-            super().__init__()
-            self.error_code = code
-            self.error_msg = msg
-            self.http_status = http_status
-            self.request_id = request_id
-
-        def __str__(self):
-            return "HTTP Status: %s, Code: %s, Msg: %s, RequestID: %s" % (
-                self.http_status, self.error_code, self.error_msg, self.request_id,
-            )
-
-    class ClientException(Exception):
-        def __init__(self, code, msg=""):
-            super().__init__()
-            self.error_code = code
-            self.error_msg = msg
-
-        def __str__(self):
-            return "%s %s" % (self.error_code, self.error_msg)
-
-    exceptions_module = ModuleType("webull.core.exception.exceptions")
-    exceptions_module.ServerException = ServerException
-    exceptions_module.ClientException = ClientException
-
-    for name in (
-        "webull",
-        "webull.core",
-        "webull.core.exception",
-        "webull.core.exception.exceptions",
-    ):
-        monkeypatch.setitem(
-            sys.modules,
-            name,
-            exceptions_module if name.endswith("exceptions") else ModuleType(name),
-        )
-    return exceptions_module
-
-
-def test_sdk_server_exception_translates_to_retryable_http_error(fake_sdk_exceptions):
-    def gateway_timeout():
-        raise fake_sdk_exceptions.ServerException(
-            "GATEWAY_TIMEOUT", "", http_status=504, request_id="req-1",
-        )
-
-    with pytest.raises(broker.BrokerHTTPError) as excinfo:
-        broker._call_sdk(gateway_timeout)
-
-    assert excinfo.value.status_code == 504
-    assert "GATEWAY_TIMEOUT" in excinfo.value.body
-
-
-def test_sdk_server_exception_without_status_defaults_to_502(fake_sdk_exceptions):
-    def unknown_failure():
-        raise fake_sdk_exceptions.ServerException("MYSTERY", http_status=None)
-
-    with pytest.raises(broker.BrokerHTTPError) as excinfo:
-        broker._call_sdk(unknown_failure)
-
-    assert excinfo.value.status_code == 502
-
-
-def test_sdk_client_exception_translates_to_connection_error(fake_sdk_exceptions):
-    def network_failure():
-        raise fake_sdk_exceptions.ClientException("SDK_HTTP_ERROR", "boom")
-
-    with pytest.raises(broker.BrokerConnectionError):
-        broker._call_sdk(network_failure)
-
-
-def test_retry_recovers_from_sdk_gateway_timeout(fake_sdk_exceptions):
-    """End-to-end: a transient 504 ServerException is retried and succeeds."""
-    calls = 0
-
-    @broker._retry()
-    def flaky_fetch():
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            return broker._call_sdk(
-                Mock(side_effect=fake_sdk_exceptions.ServerException(
-                    "GATEWAY_TIMEOUT", "", http_status=504, request_id="req-2",
-                ))
-            )
-        return "ok"
-
-    with patch("broker.time.sleep"):
-        assert flaky_fetch() == "ok"
-    assert calls == 2
+    assert result.reason == "preview rejected (HTTP 400)"
 
 
 def test_retry_retries_broker_connection_error():

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
@@ -12,12 +13,7 @@ WEBULL_TRADING_ENDPOINTS: dict[str, str] = {
     "prod": "api.webull.co.th",
 }
 
-# Map WEBULL_ENV to the SDK region_id used in HMAC signature computation.
-# Both UAT and prod targets are Thailand endpoints, so the region is "th".
-WEBULL_ENV_TO_REGION: dict[str, str] = {
-    "uat": "th",
-    "prod": "th",
-}
+WEBULL_TRADING_SESSIONS = frozenset({"CORE", "NIGHT", "ALL", "ALL_DAY"})
 
 DEFAULT_DNA_CODE = "26021034252903219354832053493"
 DEFAULT_START_TIMESTAMP = 0  # 0 = start immediately; set START_TIMESTAMP env var for future date
@@ -67,11 +63,9 @@ class BrokerConfig:
     def is_production(self) -> bool:
         """Whether orders are routed to the live production endpoint.
 
-        The bot defaults ``WEBULL_ENV`` to ``uat``, whose sandbox accepts
-        orders (returning an id) but never mutates the real position — a SELL
-        then shows in the trade log while the held quantity stays put. Surfacing
-        this on every order log makes a sandbox no-op impossible to mistake for
-        a real fill.
+        ``WEBULL_ENV`` is mandatory, so a UAT acceptance cannot be mistaken
+        for a production fill merely because an environment variable was
+        omitted.
         """
         return self.endpoint == WEBULL_TRADING_ENDPOINTS["prod"]
 
@@ -79,12 +73,18 @@ class BrokerConfig:
     def environment_label(self) -> str:
         return "prod" if self.is_production else "uat"
 
+    @property
+    def account_fingerprint(self) -> str:
+        """Stable non-secret binding used by persisted order lifecycles."""
+        return hashlib.sha256(self.account_id.encode("utf-8")).hexdigest()[:16]
+
     def safe_dict(self) -> dict[str, Any]:
         """Loggable view with credentials redacted."""
         return {
             "app_key": _mask_secret(self.app_key),
             "app_secret": "***",
             "account_id": _mask_secret(self.account_id),
+            "account_fingerprint": self.account_fingerprint,
             "region": self.region,
             "endpoint": self.endpoint,
             "token_dir": self.token_dir,
@@ -174,16 +174,27 @@ def _get_direct_credential(env_name: str, legacy_env_name: str) -> str:
 
 
 def _get_webull_endpoint(webull_env: str) -> str:
-    endpoint = os.environ.get("WEBULL_TRADING_ENDPOINT", "").strip()
-    if endpoint:
-        return endpoint
     if webull_env not in WEBULL_TRADING_ENDPOINTS:
         valid_envs = ", ".join(sorted(WEBULL_TRADING_ENDPOINTS))
+        raise ValueError(f"WEBULL_ENV must be one of: {valid_envs}")
+
+    expected = WEBULL_TRADING_ENDPOINTS[webull_env]
+    override = os.environ.get("WEBULL_TRADING_ENDPOINT", "").strip()
+    if override and override != expected:
         raise ValueError(
-            "WEBULL_ENV must be one of "
-            f"{valid_envs}, or WEBULL_TRADING_ENDPOINT must be set"
+            "WEBULL_TRADING_ENDPOINT must match the official endpoint for "
+            f"WEBULL_ENV={webull_env}: {expected}"
         )
-    return WEBULL_TRADING_ENDPOINTS[webull_env]
+    return expected
+
+
+def _get_webull_env() -> str:
+    """Return an explicit environment instead of silently choosing UAT."""
+    webull_env = os.environ.get("WEBULL_ENV", "").strip().lower()
+    if not webull_env:
+        raise ValueError("Missing required env var: WEBULL_ENV (uat or prod)")
+    _get_webull_endpoint(webull_env)
+    return webull_env
 
 
 # ---------------------------------------------------------------------------
@@ -294,16 +305,32 @@ def load_broker_config(
 
 
 def _build_broker_config(project_id: str | None = None) -> BrokerConfig:
-    webull_env = os.environ.get("WEBULL_ENV", "uat").strip().lower()
-    # Default to the v3 order API. Per the SDK docstrings the v2 order
-    # endpoints are supported only for Webull HK/US, while v3 explicitly
-    # supports Webull TH (this deployment's region). v3 derives the
-    # `category` header ("US_EQUITY") from the order body, which the TH
-    # endpoint accepts — verified working against th-api UAT by the
-    # Manual Test Lab dashboard. Overridable via WEBULL_API_VERSION.
+    webull_env = _get_webull_env()
     api_version = os.environ.get("WEBULL_API_VERSION", "v3").strip().lower()
-    if api_version not in {"v2", "v3"}:
-        raise ValueError("WEBULL_API_VERSION must be v2 or v3")
+    if api_version != "v3":
+        raise ValueError("WEBULL_API_VERSION must be v3 for Webull Thailand")
+
+    region = os.environ.get("WEBULL_REGION", "").strip().lower() or "th"
+    if region != "th":
+        raise ValueError("WEBULL_REGION must be th for Webull Thailand")
+
+    trading_session = os.environ.get(
+        "WEBULL_SUPPORT_TRADING_SESSION",
+        "CORE",
+    ).strip().upper()
+    if trading_session not in WEBULL_TRADING_SESSIONS:
+        valid_sessions = ", ".join(sorted(WEBULL_TRADING_SESSIONS))
+        raise ValueError(
+            "WEBULL_SUPPORT_TRADING_SESSION must be one of: "
+            f"{valid_sessions}"
+        )
+
+    preview_orders = _get_bool("WEBULL_PREVIEW_ORDERS", default=True)
+    if not preview_orders:
+        raise ValueError(
+            "WEBULL_PREVIEW_ORDERS must be true; the Manual flow requires "
+            "preview before every automated submission"
+        )
 
     return BrokerConfig(
         app_key=_get_direct_credential(
@@ -318,22 +345,12 @@ def _build_broker_config(project_id: str | None = None) -> BrokerConfig:
             "WEBULL_ACCOUNT_ID",
             "WEBULL_ACCOUNT_ID_SECRET_ID",
         ),
-        region=os.environ.get("WEBULL_REGION", "").strip().lower()
-        or WEBULL_ENV_TO_REGION.get(webull_env, "us"),
+        region=region,
         endpoint=_get_webull_endpoint(webull_env),
         token_dir=os.environ.get("WEBULL_TOKEN_DIR", "").strip() or None,
         api_version=api_version,
-        support_trading_session=os.environ.get(
-            "WEBULL_SUPPORT_TRADING_SESSION",
-            "CORE",
-        ).strip().upper(),
-        # Place directly by default. Fractional market orders are accepted by
-        # Webull (verified in UAT: a 0.05-share order returns a real order id),
-        # so the place response itself is the reliable acceptance signal — the
-        # bot must never gate a valid fractional order behind a stricter preview.
-        # Preview-gating stays available for the cautious (WEBULL_PREVIEW_ORDERS
-        # =true): when on, an order the preview flags as an error is not placed.
-        preview_orders=_get_bool("WEBULL_PREVIEW_ORDERS", default=False),
+        support_trading_session=trading_session,
+        preview_orders=preview_orders,
     )
 
 
@@ -369,27 +386,48 @@ def validate_startup() -> dict[str, str]:
             else f"error: set {env_name} or {secret_env_name}"
         )
 
-    webull_env = os.environ.get("WEBULL_ENV", "uat").strip().lower()
+    webull_env = os.environ.get("WEBULL_ENV", "").strip().lower()
     try:
+        if not webull_env:
+            raise ValueError("Missing required env var: WEBULL_ENV (uat or prod)")
         checks["webull_endpoint"] = f"ok ({_get_webull_endpoint(webull_env)})"
     except Exception as exc:
         checks["webull_endpoint"] = f"error: {exc}"
 
     api_version = os.environ.get("WEBULL_API_VERSION", "v3").strip().lower()
     checks["webull_api_version"] = (
-        "ok" if api_version in {"v2", "v3"}
-        else "error: WEBULL_API_VERSION must be v2 or v3"
+        "ok" if api_version == "v3"
+        else "error: WEBULL_API_VERSION must be v3 for Webull Thailand"
+    )
+
+    region = os.environ.get("WEBULL_REGION", "").strip().lower() or "th"
+    checks["webull_region"] = (
+        "ok" if region == "th"
+        else "error: WEBULL_REGION must be th for Webull Thailand"
+    )
+
+    trading_session = os.environ.get(
+        "WEBULL_SUPPORT_TRADING_SESSION", "CORE"
+    ).strip().upper()
+    checks["webull_trading_session"] = (
+        "ok" if trading_session in WEBULL_TRADING_SESSIONS
+        else "error: invalid WEBULL_SUPPORT_TRADING_SESSION"
+    )
+
+    checks["webull_preview"] = (
+        "ok" if _get_bool("WEBULL_PREVIEW_ORDERS", default=True)
+        else "error: WEBULL_PREVIEW_ORDERS must be true"
     )
 
     return checks
 
 
 def get_config() -> dict[str, Any]:
-    """Backward-compatible merged config for local scripts/tests."""
+    """Return a merged, log-safe configuration for local diagnostics."""
     app_config = load_app_config()
     broker_config = load_broker_config(app_config.project_id)
     return {
         **asdict(app_config),
         "dna_string": app_config.dna_string,
-        **asdict(broker_config),
+        **broker_config.safe_dict(),
     }
