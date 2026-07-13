@@ -8,9 +8,27 @@ import pytest
 from flask import Flask
 
 import main
-from broker import BrokerHTTPError, MarketState, OrderResult
+from broker import BrokerError, BrokerHTTPError, MarketState, OrderResult, OrderStatus
 from config import AppConfig
 from state import StepReservation
+
+
+def _filled_status(client_order_id: str = "id", filled: float = 5.0) -> OrderStatus:
+    return OrderStatus(
+        client_order_id=client_order_id,
+        status="FILLED",
+        filled_quantity=filled,
+        raw_response={"status": "FILLED", "filled_quantity": filled},
+    )
+
+
+def _unfilled_status(client_order_id: str = "id", status: str = "CANCELLED") -> OrderStatus:
+    return OrderStatus(
+        client_order_id=client_order_id,
+        status=status,
+        filled_quantity=0.0,
+        raw_response={"status": status, "filled_quantity": 0},
+    )
 
 
 @pytest.fixture
@@ -137,6 +155,8 @@ def test_order_response_and_deterministic_client_id_are_preserved(app, app_confi
         preview=None,
         raw_response={"order_id": "order-1"},
     )
+    # Webull confirms the order actually executed.
+    broker_instance.get_order_status.return_value = _filled_status(filled=5.0)
     log_trade = Mock()
 
     body, code, _ = invoke(
@@ -156,7 +176,9 @@ def test_order_response_and_deterministic_client_id_are_preserved(app, app_confi
     assert body["decision"]["action"] == "BUY"
     assert body["order"]["order_id"] == "order-1"
     payload = log_trade.call_args.args[1]
-    assert payload["status"] == "ORDER_SUBMITTED"
+    # A verified fill is logged as ORDER_FILLED, not a blind ORDER_SUBMITTED.
+    assert payload["status"] == "ORDER_FILLED"
+    assert payload["filled_quantity"] == 5.0
     assert payload["last_price"] == 100.0
     assert payload["quantity"] == 5.0
     assert payload["order_result"]["order_id"] == "order-1"
@@ -165,6 +187,85 @@ def test_order_response_and_deterministic_client_id_are_preserved(app, app_confi
     assert kwargs["side"] == "BUY"
     assert kwargs["quantity"] == 5.0
     assert len(kwargs["client_order_id"]) == 32
+    # The verified order is the one that was placed.
+    broker_instance.get_order_status.assert_called_once_with(
+        kwargs["client_order_id"]
+    )
+
+
+def test_accepted_but_unfilled_order_is_logged_as_not_filled(app, app_config):
+    """The reported bug: an order accepted with an id but never filled.
+
+    Webull returns a real order id (accepted), yet the order is cancelled /
+    expired with 0 filled, so the held quantity never moves. The log must call
+    this ORDER_NOT_FILLED, not paint it as a submitted trade.
+    """
+    broker_instance = Mock()
+    broker_instance.get_position_and_price.return_value = MarketState(4.773, 320.0)
+    broker_instance.has_open_order.return_value = False
+    broker_instance.place_market_order.return_value = OrderResult(
+        client_order_id="id",
+        order_id="order-1",
+        status="SUBMITTED",
+        preview=None,
+        raw_response={"order_id": "order-1"},
+    )
+    broker_instance.get_order_status.return_value = _unfilled_status(status="CANCELLED")
+    log_trade = Mock()
+
+    body, code, _ = invoke(
+        app,
+        load_app_config=Mock(return_value=app_config),
+        load_broker_config=Mock(return_value=SimpleNamespace(
+            environment_label="prod",
+            endpoint="api.webull.co.th",
+            is_production=True,
+        )),
+        get_broker=Mock(return_value=broker_instance),
+        _log_trade=log_trade,
+    )
+
+    assert code == 200
+    assert body["status"] == "ORDER_NOT_FILLED"
+    assert body["order_log_status"] == "ORDER_NOT_FILLED"
+    payload = log_trade.call_args.args[1]
+    assert payload["status"] == "ORDER_NOT_FILLED"
+    assert payload["filled_quantity"] == 0.0
+    assert "did not move" in payload["not_filled_reason"]
+
+
+def test_fill_verification_failure_falls_back_to_submitted(app, app_config):
+    """If the fill can't be read back, the tick still succeeds (best-effort)."""
+    broker_instance = Mock()
+    broker_instance.get_position_and_price.return_value = MarketState(5.0, 100.0)
+    broker_instance.has_open_order.return_value = False
+    broker_instance.place_market_order.return_value = OrderResult(
+        client_order_id="id",
+        order_id="order-1",
+        status="SUBMITTED",
+        preview=None,
+        raw_response={"order_id": "order-1"},
+    )
+    broker_instance.get_order_status.side_effect = BrokerError("detail read failed")
+    log_trade = Mock()
+
+    body, code, _ = invoke(
+        app,
+        load_app_config=Mock(return_value=app_config),
+        load_broker_config=Mock(return_value=SimpleNamespace(
+            environment_label="prod",
+            endpoint="api.webull.co.th",
+            is_production=True,
+        )),
+        get_broker=Mock(return_value=broker_instance),
+        _log_trade=log_trade,
+    )
+
+    assert code == 200
+    assert body["status"] == "OK"
+    payload = log_trade.call_args.args[1]
+    assert payload["status"] == "ORDER_SUBMITTED"
+    assert payload["fill_verified"] is False
 
 
 def test_unaccepted_order_is_logged_as_rejected_not_submitted(app, app_config):
@@ -204,6 +305,8 @@ def test_unaccepted_order_is_logged_as_rejected_not_submitted(app, app_config):
     payload = log_trade.call_args.args[1]
     assert payload["status"] == "ORDER_REJECTED"
     assert payload["order_result"]["reason"] == "rejected"
+    # A never-accepted order is not verified — there is no live order to read.
+    broker_instance.get_order_status.assert_not_called()
 
 
 def test_order_log_records_broker_environment(app, app_config):
@@ -218,6 +321,8 @@ def test_order_log_records_broker_environment(app, app_config):
         preview=None,
         raw_response={"order_id": "order-1"},
     )
+    # UAT accepts the order but never fills a real position.
+    broker_instance.get_order_status.return_value = _unfilled_status(status="CANCELLED")
     log_trade = Mock()
 
     invoke(
@@ -252,6 +357,7 @@ def test_production_order_has_no_sandbox_note(app, app_config):
         preview=None,
         raw_response={"order_id": "order-1"},
     )
+    broker_instance.get_order_status.return_value = _filled_status(filled=5.0)
     log_trade = Mock()
 
     body, _, _ = invoke(

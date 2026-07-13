@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<!-- Five-Step-Planner guide (rev.3) — Shannon Demon DNA: SELL ที่ไม่กระทบจำนวนถือครอง -->
+<!-- Five-Step-Planner guide (rev.4) — Shannon Demon DNA: SELL ที่ไม่กระทบจำนวนถือครอง -->
 <html lang="th">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>แผนแก้ (final/rev.3): SELL ออกแต่จำนวนถือครองเท่าเดิม</title>
+<title>แผนแก้ (final/rev.4): ส่ง order แต่จำนวนถือครองเท่าเดิม</title>
 <style>
   :root{
     --bg:#faf7f2; --ink:#2b2b2b; --muted:#6f6a63;
@@ -54,62 +54,63 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>ทำไม SELL ออกแล้ว “จำนวนถือครอง (หุ้น)” เท่าเดิม — แผนแก้ (final)</h1>
+    <h1>ทำไมส่ง order แล้ว “จำนวนถือครอง (หุ้น)” เท่าเดิม — แผนแก้ (final)</h1>
     <p>Shannon Demon DNA bot · Goals → Problems → Diagnosis → Design → Do it</p>
-    <div class="rev">rev.3 (final) · ยืนยันแล้ว: Webull “รับ” ออร์เดอร์เศษหุ้นได้ → ต้นเหตุจริงคือ environment</div>
+    <div class="rev">rev.4 (final) · จาก log ล่าสุด: ออร์เดอร์บอท “รับแต่ไม่ fill” · บอทวางออร์เดอร์แบบ blind ไม่เคยยืนยันการ fill</div>
   </header>
 
   <div class="evi">
-    <h3>🔬 หลักฐานยืนยันจาก Manual Test Lab (UAT)</h3>
+    <h3>🔬 หลักฐานจาก log ล่าสุด (จำนวนถือครองขยับ “ผิดที่”)</h3>
     <ul style="margin:6px 0 0;padding-left:20px;font-size:.93rem">
-      <li><b>เศษหุ้นส่งได้จริง</b>: Submit BUY AAPL <code>quantity: "0.05"</code> → <b>“Webull accepted the order request”</b> + <code>order_id: 037QS4S6QE8OO0KF4H6G000000</code></li>
-      <li>Preview หุ้นเต็ม (1) ก็ผ่าน · Positions อ่านได้ (AAPL 3.77304)</li>
-      <li><b>สรุป</b>: กลไกส่งออร์เดอร์ + เศษหุ้น ทำงานครบ — แต่ “ตำแหน่งไม่ขยับ” เพราะ <b>UAT รับออร์เดอร์แต่ไม่ fill กับตำแหน่งจริง</b></li>
+      <li><b>3 SELL ของบอท</b> (14:20–14:30, qty≈0.10/ไม้) → holding นิ่งที่ <code>4.773</code></li>
+      <li>holding ขยับ <code>4.773 → 3.773</code> (พอดี <b>−1.0 หุ้นเต็ม</b>) ช่วง 15:00–15:10 ที่ <b>ไม่มีออร์เดอร์บอท</b> = คำสั่งมือ SELL 1 หุ้นจาก Manual Test Lab</li>
+      <li>BUY ของบอทหลังจากนั้น (qty≈0.95) → holding แช่ <code>3.773</code> · 3 SELL ติดกันไม่ถูก <code>has_open_order</code> บล็อก → ออร์เดอร์ที่รับไม่ได้ค้างเป็น open (ถูก drop/expire) และไม่ fill</li>
+      <li><b>สรุป</b>: หุ้นเต็ม fill ได้ · <b>ออร์เดอร์เศษหุ้นของบอท “รับ (order_id) แต่ไม่ fill”</b> — payload บอทเหมือน Manual Test Lab ทุกฟิลด์ สิ่งที่ขาดคือ “การยืนยัน”</li>
     </ul>
   </div>
 
   <div class="big">
-    <b>🧭 คำตอบของโจทย์:</b> ออร์เดอร์ SELL ของบอท “ถูกส่งและถูกรับจริง” (มี order_id) แต่ <b>จำนวนถือครองไม่ขยับเพราะรันบน UAT sandbox</b>
-    ที่ไม่ทำการ fill · โค้ดเดิมยัง log ว่า ORDER_SUBMITTED โดยไม่บอกว่าเป็น UAT จึงดูเหมือน “ขายแล้วแต่หุ้นไม่ลด”
+    <b>🧭 คำตอบของโจทย์:</b> ออร์เดอร์ของบอท “ถูกรับจริง” (มี order_id) แต่ <b>ไม่ถูก fill</b> จำนวนถือครองจึงนิ่ง ·
+    บอทวางออร์เดอร์แบบ <b>blind</b> แล้ว log ว่า <code>ORDER_SUBMITTED</code> ทันที <b>โดยไม่เคยตรวจว่า fill จริงไหม</b> (ต่างจาก Manual Test Lab ที่มีปุ่ม Order detail / Positions) จึงดูเหมือน “ส่งแล้วแต่หุ้นไม่ลด”
   </div>
 
   <!-- STEP 1 -->
   <div class="goalbar">
-    <b>🎯 เป้าหมาย (Step 1):</b> ให้ log บอกความจริงทุกออร์เดอร์ (รับจริง/ถูกปฏิเสธ + environment) และเมื่อรันจริง (prod) ให้ SELL/BUY กระทบจำนวนถือครองจริง<br>
-    <span class="metric">ตัวชี้วัด: ออร์เดอร์เข้าตลาดจริง + log ตรงความจริง</span>
-    <span class="metric">ปัจจุบัน: UAT รับแต่ไม่ fill · log กำกวม</span>
-    <span class="metric">เป้า: prod = qty ขยับจริง · log ชัด 100%</span>
+    <b>🎯 เป้าหมาย (Step 1):</b> หลัง place ทุกครั้งให้บอท “ยืนยันการ fill จริง” (order detail แบบเดียวกับ Manual Test Lab) แล้ว log ตามความจริง<br>
+    <span class="metric">ตัวชี้วัด: log สะท้อนการ fill จริง</span>
+    <span class="metric">ปัจจุบัน: blind ORDER_SUBMITTED · ออร์เดอร์ที่ไม่ fill มองไม่เห็น</span>
+    <span class="metric">เป้า: ORDER_FILLED / ORDER_NOT_FILLED ชัด 100%</span>
   </div>
 
   <!-- STEP 2 -->
   <div class="step">
     <h2><span class="num">2</span> Problems</h2>
-    <div class="card"><h3>P1 — qty คงที่แม้ SELL ออก 3 ครั้ง <span class="tag hot">severity 5/5</span></h3>
-      Webull รายงานตำแหน่งเดิมทุก tick → ออร์เดอร์ไม่ fill กับตำแหน่งจริง (พฤติกรรม UAT)</div>
-    <div class="card"><h3>P2 — log ORDER_SUBMITTED ไม่บอกว่าเป็น UAT และไม่ยืนยัน order_id <span class="tag hot">severity 5/5</span></h3>
-      ทำให้ “ออร์เดอร์ที่รับแต่ไม่ fill (UAT)” ดูเหมือน “ขายจริงแต่หุ้นไม่ลด”</div>
-    <div class="card"><h3>P3 — ไม่รู้ว่า deploy อยู่บน environment ไหน <span class="tag">severity 4/5</span></h3>
-      default <code>WEBULL_ENV=uat</code> และไม่มีคำเตือน/บันทึก endpoint</div>
+    <div class="card"><h3>P1 — ออร์เดอร์เศษหุ้นบอท “รับ (order_id) แต่ไม่ fill” <span class="tag hot">severity 5/5</span></h3>
+      qty นิ่งทุก tick · มีแค่ −1.0 หุ้นเต็ม (คำสั่งมือ) ที่ fill ได้</div>
+    <div class="card"><h3>P2 — บอทวางออร์เดอร์แบบ blind: log ORDER_SUBMITTED โดยไม่ยืนยัน fill <span class="tag hot">severity 5/5</span></h3>
+      ออร์เดอร์ที่รับแต่ไม่ fill จึงมองไม่เห็น → ดูเหมือน “ส่งจริงแต่หุ้นไม่ลด”</div>
+    <div class="card"><h3>P3 — อาจรันบน UAT (รับแต่ไม่ fill) <span class="tag">severity 4/5</span></h3>
+      default <code>WEBULL_ENV=uat</code> · ต้องแยกจาก P1 ด้วยการยืนยัน fill + คำเตือน</div>
   </div>
 
   <!-- STEP 3 -->
   <div class="step">
     <h2><span class="num">3</span> Diagnosis</h2>
-    <div class="card"><h3>RC1 — รันบน UAT: รับออร์เดอร์แต่ไม่ fill กับตำแหน่งจริง <span class="tag hot">w = 0.60 ▲</span></h3>
+    <div class="card"><h3>RC1 — บอทไม่ยืนยันการ fill หลัง place (blind) <span class="tag hot">w = 0.65 ▲</span></h3>
       <ol class="why">
-        <li>ทำไม qty ไม่ขยับ? → ออร์เดอร์ไม่ถูก fill</li>
-        <li>ทำไมไม่ fill? → endpoint เป็น UAT sandbox (ยืนยัน: submit เศษหุ้น “accepted” แต่ตำแหน่งไม่เปลี่ยน)</li>
-        <li>ทำไมเป็น UAT? → <code>config.py</code> default <code>WEBULL_ENV=uat</code></li>
+        <li>ทำไม log ดูเหมือนขายแต่หุ้นไม่ลด? → บอทถือว่า place สำเร็จ (order_id) = เสร็จ</li>
+        <li>ทำไมถึงพลาด? → ไม่เคยอ่าน <code>filled_quantity</code>/สถานะจริงกลับมา</li>
+        <li>Manual Test Lab ต่างยังไง? → มีปุ่ม <code>Order detail / Positions</code> ให้ “ยืนยัน” เสมอ</li>
       </ol>
     </div>
-    <div class="card"><h3>RC2 — log ไม่ยืนยัน + ไม่ระบุ environment <span class="tag hot">w = 0.40</span></h3>
+    <div class="card"><h3>RC2 — เศษหุ้น/สภาพตลาด (หรือ UAT) ทำให้ “รับแต่ไม่ fill” <span class="tag hot">w = 0.35</span></h3>
       <ol class="why">
-        <li>เขียน ORDER_SUBMITTED ตายตัว ไม่เช็ค order_id/สถานะ</li>
-        <li>ไม่บอกว่า UAT → อ่าน log ไม่รู้ว่าทำไมหุ้นไม่ลด</li>
+        <li>หุ้นเต็ม fill ได้ · เศษหุ้นบอทไม่ fill → ถูก drop/expire</li>
+        <li>หรือ endpoint = UAT sandbox ที่ไม่ fill กับตำแหน่งจริง</li>
       </ol>
     </div>
-    <div class="card"><h3><span class="tag strike">RC (เดิม): เศษหุ้นถูกปฏิเสธ</span> — <b>ตัดทิ้ง</b></h3>
-      พิสูจน์แล้วว่าเศษหุ้น <code>0.05</code> ถูกรับ (มี order_id) → ไม่ใช่ต้นเหตุ · โค้ดจึงต้อง “ไม่บล็อกเศษหุ้น”</div>
+    <div class="card"><h3><span class="tag strike">RC (เดิม): payload ต่างจาก Manual Test Lab</span> — <b>ตัดทิ้ง</b></h3>
+      ตรวจแล้ว payload เหมือนกันทุกฟิลด์ (<code>order_v3.place_order</code>, <code>entrust_type=QTY</code>) → การจัด payload ให้ตรงไม่เปลี่ยนอะไร</div>
   </div>
 
   <!-- STEP 4 -->
@@ -118,12 +119,11 @@
     <div class="scroll">
     <table>
       <tr><th>อันดับ</th><th>มาตรการ</th><th>ยิงที่</th><th>สถานะ</th></tr>
-      <tr><td>1</td><td>ยืนยันการรับจริง (order_id + สถานะไม่ reject) → <b>ไม่บล็อกเศษหุ้น</b> ใช้ response ของ place เป็นตัวตัดสิน</td><td>RC2</td><td class="done">✔ ทำแล้ว</td></tr>
-      <tr><td>2</td><td>log ORDER_SUBMITTED เฉพาะเมื่อ accepted / ไม่งั้น ORDER_REJECTED + reason</td><td>RC2</td><td class="done">✔ ทำแล้ว</td></tr>
-      <tr><td>3</td><td>แนบ <code>broker_environment/endpoint/is_production</code> + <b><code>sandbox_note</code></b> ทุกออร์เดอร์ UAT (บอกตรง ๆ ว่า “ตำแหน่งจริงไม่กระทบ”)</td><td>RC1/RC2</td><td class="done">✔ ทำแล้ว</td></tr>
-      <tr><td>4</td><td><code>/health</code> เตือนเมื่อ trading_environment ≠ prod</td><td>RC1</td><td class="done">✔ ทำแล้ว</td></tr>
-      <tr><td>5</td><td>คืน preview เป็น opt-in (default off) — ไม่เสี่ยงบล็อกเศษหุ้นที่ place รับได้</td><td>RC2</td><td class="done">✔ ทำแล้ว</td></tr>
-      <tr><td>6</td><td><b>ตั้ง <code>WEBULL_ENV=prod</code></b> แล้ว deploy → SELL/BUY จะกระทบ qty จริง</td><td>RC1</td><td class="todo">ผู้ใช้</td></tr>
+      <tr><td>1</td><td><b><code>broker.get_order_status()</code></b> อ่าน <code>order_v2.get_order_detail</code> (API เดียวกับ Manual Test Lab) → <code>status</code> + <code>filled_quantity</code></td><td>RC1</td><td class="done">✔ ทำแล้ว</td></tr>
+      <tr><td>2</td><td>หลัง place ที่ accepted → ยืนยัน fill แล้ว log <b><code>ORDER_FILLED</code></b> / <b><code>ORDER_NOT_FILLED</code></b>(+เหตุผล) / <code>ORDER_SUBMITTED</code>(ค้าง)</td><td>RC1</td><td class="done">✔ ทำแล้ว</td></tr>
+      <tr><td>3</td><td>ยืนยันเป็น <b>best-effort</b> (อ่านไม่ได้ → <code>fill_verified=false</code> ไม่ล้ม tick ไม่ roll back DNA step)</td><td>RC1</td><td class="done">✔ ทำแล้ว</td></tr>
+      <tr><td>4</td><td>แนบ <code>filled_quantity/order_status</code> + <code>sandbox_note</code> (UAT) + <code>/health</code> warning ให้แยกสาเหตุได้</td><td>RC2</td><td class="done">✔ ทำแล้ว</td></tr>
+      <tr><td>5</td><td><b>ตั้ง <code>WEBULL_ENV=prod</code></b> แล้ว deploy → ยืนยันว่า <code>ORDER_FILLED</code> ตรงกับ qty ที่ลดจริง</td><td>RC2</td><td class="todo">ผู้ใช้</td></tr>
     </table>
     </div>
   </div>
@@ -134,34 +134,35 @@
     <div class="scroll">
     <table>
       <tr><th>การกระทำ</th><th>ผู้รับผิดชอบ</th><th>สถานะ</th></tr>
-      <tr><td>broker/main/config: acceptance check + honest log + env stamp + sandbox_note + health warning + preview opt-in</td><td>โค้ด (PR นี้)</td><td class="done">เสร็จ</td></tr>
-      <tr><td>เทสต์ 83 ผ่าน (รวม fractional accepted ไม่ถูกบล็อก + sandbox_note)</td><td>โค้ด (PR นี้)</td><td class="done">เสร็จ</td></tr>
+      <tr><td>broker.py: <code>OrderStatus</code> + <code>get_order_status</code> (order_v2.get_order_detail)</td><td>โค้ด (PR นี้)</td><td class="done">เสร็จ</td></tr>
+      <tr><td>main.py: <code>_verify_fill</code> + log ORDER_FILLED/ORDER_NOT_FILLED/ORDER_SUBMITTED + filled_quantity</td><td>โค้ด (PR นี้)</td><td class="done">เสร็จ</td></tr>
+      <tr><td>เทสต์ <b>89 ผ่าน</b> (filled→FILLED, accepted-unfilled→NOT_FILLED, verify-fail→fallback, parse filled_quantity)</td><td>โค้ด (PR นี้)</td><td class="done">เสร็จ</td></tr>
       <tr><td>ตั้ง WEBULL_ENV=prod · เช็ค <code>/health</code> ว่า trading_environment=prod</td><td>ผู้ใช้</td><td class="todo">รอ</td></tr>
-      <tr><td>ปล่อย 1 tick ที่เป็น SELL → ยืนยัน qty ลดจริงใน log แถวถัดไป</td><td>ผู้ใช้</td><td class="todo">รอ</td></tr>
+      <tr><td>ปล่อย 1 tick → ยืนยันแถวถัดไปเป็น <code>ORDER_FILLED</code> + qty ลดจริง (หรือ <code>ORDER_NOT_FILLED</code> พร้อมเหตุผลถ้าเศษหุ้นไม่ fill)</td><td>ผู้ใช้</td><td class="todo">รอ</td></tr>
     </table>
     </div>
 
     <h3 style="color:var(--accent);margin-top:16px">สมการวัดผล</h3>
-    <div class="eq"><span class="lbl">อัตรารับจริง</span>A = accepted_orders / intended_orders   (เป้า → 1)</div>
-    <div class="eq"><span class="lbl">ตำแหน่งขยับจริง (prod)</span>Δqty_actual = qty(n−1) − qty(n)  ควรใกล้ order_qty</div>
+    <div class="eq"><span class="lbl">อัตรา fill จริง</span>F = filled_orders / intended_orders   (เป้า → 1)</div>
+    <div class="eq"><span class="lbl">ตำแหน่งขยับจริง (prod)</span>Δqty_actual = qty(n−1) − qty(n)  ควร ~ filled_quantity</div>
 
     <div class="loop">
       <h3 style="margin-top:0;color:var(--warn)">🔁 Control loop</h3>
-      <div class="eq"><span class="lbl">error</span>e_n = order_qty − Δqty_actual   (บน prod, ต่อ SELL)</div>
+      <div class="eq"><span class="lbl">error</span>e_n = order_qty − filled_quantity   (บน prod, ต่อไม้)</div>
       <div class="scroll">
       <table class="ladder">
         <tr><th>สังเกตจาก log</th><th>แปลว่า</th><th>ทำต่อ</th></tr>
-        <tr><td>มี sandbox_note (is_production=false)</td><td>ยังรัน UAT</td><td>Step 4 · มาตรการ 6 (ตั้ง prod)</td></tr>
-        <tr><td>prod + ORDER_SUBMITTED + qty ลดจริง</td><td>สำเร็จ</td><td>หยุด (|e_n| ≤ ε=0.02)</td></tr>
-        <tr><td>ORDER_REJECTED + reason</td><td>ออร์เดอร์ผิดจริง</td><td>Step 2 · อ่าน reason แล้วแก้</td></tr>
-        <tr><td>prod แต่ qty ไม่ขยับ</td><td>order ค้าง/ไม่ fill</td><td>Step 3 · ตรวจ has_open_order + order detail</td></tr>
+        <tr><td>ORDER_FILLED + qty ลดจริง</td><td>สำเร็จ</td><td>หยุด (|e_n| ≤ ε=0.02)</td></tr>
+        <tr><td>ORDER_NOT_FILLED (เศษหุ้นไม่ fill)</td><td>รับแต่ไม่ fill</td><td>Step 3 · ตรวจ prod/uat · ลอง session/หุ้นเต็ม/notional เพื่อยืนยันกฎ fractional</td></tr>
+        <tr><td>มี sandbox_note (is_production=false)</td><td>ยังรัน UAT</td><td>Step 4 · มาตรการ 5 (ตั้ง prod)</td></tr>
+        <tr><td>fill_verified=false บ่อย</td><td>อ่าน detail ไม่ได้</td><td>Step 4 · ตรวจสิทธิ์ get_order_detail/เครือข่าย</td></tr>
       </table>
       </div>
       <p style="font-size:.9rem;margin:8px 0 0"><b>ลูป:</b> ε = 0.02 หุ้น · K = 1.0 · n_max = 5</p>
     </div>
   </div>
 
-  <footer>สร้างด้วย five-step-planner · rev.3 (final) · Goals → Problems → Diagnosis → Design → Do it</footer>
+  <footer>สร้างด้วย five-step-planner · rev.4 (final) · Goals → Problems → Diagnosis → Design → Do it</footer>
 </div>
 </body>
 </html>

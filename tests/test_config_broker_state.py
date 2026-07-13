@@ -260,6 +260,67 @@ def test_open_order_guard_uses_dashboard_account_orders_api():
     open_orders.assert_called_with("account", page_size=100)
 
 
+def _order_detail_broker(detail_payload):
+    detail = Mock(return_value=SimpleNamespace(
+        status_code=200,
+        json=lambda: detail_payload,
+    ))
+    instance = broker.WebullBroker.__new__(broker.WebullBroker)
+    instance.account_id = "account"
+    instance.trade_client = SimpleNamespace(
+        order_v2=SimpleNamespace(get_order_detail=detail),
+    )
+    return instance, detail
+
+
+def test_get_order_status_reads_filled_quantity_from_order_detail():
+    """A filled order reports a positive filled quantity (Manual Test Lab check)."""
+    instance, detail = _order_detail_broker(
+        {"order_id": "order-1", "status": "FILLED", "filled_quantity": "0.10247"}
+    )
+
+    status = instance.get_order_status("coid")
+
+    assert status.filled_quantity == 0.10247
+    assert status.is_filled is True
+    assert status.is_terminal_unfilled is False
+    detail.assert_called_once_with("account", "coid")
+
+
+def test_get_order_status_flags_accepted_but_cancelled_order_as_unfilled():
+    """The reported bug: accepted id, cancelled, nothing filled."""
+    instance, _ = _order_detail_broker(
+        {"order_id": "order-1", "status": "CANCELLED", "filled_quantity": "0"}
+    )
+
+    status = instance.get_order_status("coid")
+
+    assert status.filled_quantity == 0.0
+    assert status.is_filled is False
+    assert status.is_terminal_unfilled is True
+
+
+def test_get_order_status_treats_partial_fill_as_filled():
+    instance, _ = _order_detail_broker(
+        {"status": "PARTIALLY_FILLED", "filledQty": "0.5"}
+    )
+
+    status = instance.get_order_status("coid")
+
+    assert status.is_filled is True
+
+
+def test_get_order_status_missing_fill_field_defaults_to_zero():
+    instance, _ = _order_detail_broker({"status": "PENDING"})
+
+    status = instance.get_order_status("coid")
+
+    assert status.filled_quantity == 0.0
+    assert status.is_filled is False
+    # Pending is neither filled nor a terminal reject.
+    assert status.is_terminal_unfilled is False
+
+
 def test_place_market_order_is_submitted_once_and_never_resubmitted(fake_sdk_exceptions):
     """Order placement must not retry: a resubmit trips 417 / risks a dup fill."""
     instance = broker.WebullBroker.__new__(broker.WebullBroker)
