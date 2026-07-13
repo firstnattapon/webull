@@ -328,7 +328,7 @@ gcloud run services logs read "$SERVICE_NAME" --region="$REGION" --limit=50
 ```bash
 gcloud run services update "$SERVICE_NAME" \
   --region="$REGION" \
-  --update-env-vars="WEBULL_ENV=prod,WEBULL_REGION=th,WEBULL_API_VERSION=v3,WEBULL_PREVIEW_ORDERS=false,WEBULL_APP_KEY=...,WEBULL_APP_SECRET=...,WEBULL_ACCOUNT_ID=..."
+  --update-env-vars="WEBULL_ENV=prod,WEBULL_REGION=th,WEBULL_API_VERSION=v3,WEBULL_PREVIEW_ORDERS=true,WEBULL_APP_KEY=...,WEBULL_APP_SECRET=...,WEBULL_ACCOUNT_ID=..."
 ```
 
 Production ต้องใช้ credentials ของ Production และ endpoint ที่ระบบเลือกต้องเป็น `api.webull.co.th` ส่วน UAT ใช้ `th-api.uat.webullbroker.com`

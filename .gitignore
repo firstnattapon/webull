@@ -3,3 +3,6 @@ __pycache__/
 .venv/
 venv/
 .env
+webull_*_sdk.log
+conf/token.txt
+.webull/

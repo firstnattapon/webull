@@ -4,30 +4,31 @@ Single ``WebullBroker`` class with:
   - retry for idempotent reads only (3x jittered backoff on HTTP 5xx,
     network errors, and Webull's 417 OPENAPI_REPEAT_REQUEST throttle);
     order placement is submitted exactly once and never resubmitted
-  - shared I/O thread pool (position + price fetched concurrently,
-    pool reused across invocations instead of rebuilt per call)
+  - Manual-compatible sequential position + quote reads through one gateway
   - connection caching (module-level singleton, thread-safe)
   - lightweight metrics counters exposed via ``get_broker_metrics``
 """
 
 from __future__ import annotations
 
-import atexit
 import functools
 import logging
 import math
 import random
+import re
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from typing import Any
 
 logger = logging.getLogger("shannon_demon_dna.broker")
 
-US_STOCK_CATEGORY = "US_STOCK"
 ORDER_QUANTITY_DECIMAL_PRECISION = 5
 OPEN_ORDER_PAGE_SIZE = 100
+OPEN_ORDER_MAX_PAGES = 50
+CANCEL_CONFIRM_ATTEMPTS = 3
+CANCEL_CONFIRM_INTERVAL_SECONDS = 1.05
+EQUITY_INSTRUMENT_TYPES = frozenset({"EQUITY", "STOCK"})
 
 SYMBOL_FIELDS = (
     "symbol", "ticker", "instrument_symbol", "instrumentSymbol",
@@ -37,10 +38,12 @@ POSITION_QUANTITY_FIELDS = (
     "position_qty", "positionQty", "holding_quantity", "holdingQuantity",
     "net_quantity", "netQuantity", "available_qty", "availableQty",
 )
-LAST_PRICE_FIELDS = (
-    "last_price", "lastPrice", "last", "price", "close",
-    "close_price", "closePrice", "pPrice",
-)
+SNAPSHOT_PRICE_FIELDS_BY_SESSION = {
+    "CORE": ("price",),
+    "ALL": ("price", "extend_hour_last_price"),
+    "NIGHT": ("ovn_price",),
+    "ALL_DAY": ("price", "extend_hour_last_price", "ovn_price"),
+}
 ORDER_ID_FIELDS = ("order_id", "orderId", "id")
 ORDER_STATUS_FIELDS = ("status", "order_status", "orderStatus")
 # Webull can answer a place request with HTTP 200 while the body reports the
@@ -57,14 +60,6 @@ ORDER_REASON_FIELDS = (
     "desc", "reason", "failure_reason", "failureReason", "code",
     "error_code", "errorCode", "failure_code", "failureCode",
 )
-# A successful preview (the Manual Test Lab's "Preview completed" path) returns
-# cost/fee estimates. Their presence is what distinguishes an acceptable order
-# from an error envelope returned under HTTP 200.
-PREVIEW_ESTIMATE_FIELDS = (
-    "estimated_cost", "estimatedCost", "estimated_amount", "estimatedAmount",
-    "estimated_transaction_fee", "estimatedTransactionFee",
-    "estimated_quantity", "estimatedQuantity", "buying_power", "buyingPower",
-)
 # The quantity Webull reports as actually executed on an order. Reading this
 # back (via the Manual Test Lab's "Order detail" endpoint) is the only way to
 # know an accepted order truly moved the position — a fractional order can be
@@ -76,6 +71,16 @@ FILLED_QUANTITY_FIELDS = (
     "cumulative_filled_quantity", "cumulativeFilledQuantity",
     "executed_quantity", "executedQuantity", "filled",
 )
+ACCOUNT_ID_FIELDS = ("account_id", "accountId")
+ORDER_QUANTITY_FIELDS = (
+    "quantity", "qty", "order_quantity", "orderQuantity",
+    "total_quantity", "totalQuantity",
+)
+TERMINAL_ORDER_STATUSES = frozenset({
+    *REJECTED_ORDER_STATUSES,
+    "FILLED",
+})
+PARTIAL_ORDER_STATUSES = frozenset({"PARTIAL_FILLED", "PARTIALLY_FILLED"})
 # ---------------------------------------------------------------------------
 # Exceptions
 # ---------------------------------------------------------------------------
@@ -101,6 +106,18 @@ class BrokerConnectionError(BrokerError):
 
 class BrokerValidationError(BrokerError):
     """Invalid input or invalid upstream data before/after an API call."""
+    pass
+
+
+class OrderSubmissionUnknownError(BrokerError):
+    """A place request was attempted but its booking outcome is ambiguous."""
+
+    pass
+
+
+class OrderCancellationUnknownError(BrokerError):
+    """A cancel was attempted once but its terminal outcome is not confirmed."""
+
     pass
 
 
@@ -134,7 +151,17 @@ class OrderResult:
     reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        # Raw SDK bodies can contain account/order details and must remain
+        # in-memory only.  Firestore/HTTP consumers receive the correlated,
+        # normalized result instead of an opaque response dump.
+        return {
+            "client_order_id": self.client_order_id,
+            "order_id": self.order_id,
+            "status": self.status,
+            "accepted": self.accepted,
+            "reason": self.reason,
+            "previewed": self.preview is not None,
+        }
 
 
 @dataclass(frozen=True)
@@ -154,35 +181,64 @@ class OrderStatus:
     status: str
     filled_quantity: float
     raw_response: Any
+    order_quantity: float | None = None
+
+    @property
+    def normalized_status(self) -> str:
+        return self.status.strip().upper()
+
+    @property
+    def has_fill(self) -> bool:
+        return self.filled_quantity > 0
 
     @property
     def is_filled(self) -> bool:
-        """Whether Webull reports a positive executed quantity.
+        """Whether the full order is terminally filled.
 
-        A status label alone is not enough for the trading log: the contract
-        exposes ``filled_quantity`` specifically so an accepted order can be
-        distinguished from one that actually changed the position.  If a
-        transient/inconsistent response says ``FILLED`` with zero quantity,
-        the caller keeps polling instead of recording a phantom fill.
+        A positive cumulative fill is not automatically complete.  The old
+        implementation stopped at the first partial fill and abandoned the
+        remaining lifecycle, which left the dashboard permanently stale.
         """
-        return self.filled_quantity > 0
+        if self.normalized_status != "FILLED" or not self.has_fill:
+            return False
+        if self.order_quantity is None:
+            return True
+        return self.filled_quantity + 1e-8 >= self.order_quantity
+
+    @property
+    def is_partial_fill(self) -> bool:
+        return self.has_fill and not self.is_filled
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.normalized_status in TERMINAL_ORDER_STATUSES
 
     @property
     def is_terminal_unfilled(self) -> bool:
         """Whether the order reached a dead end without executing anything."""
         return (
-            self.filled_quantity <= 0
-            and self.status.strip().upper() in REJECTED_ORDER_STATUSES
+            not self.has_fill
+            and self.normalized_status in REJECTED_ORDER_STATUSES
         )
+
+    @property
+    def remaining_quantity(self) -> float | None:
+        if self.order_quantity is None:
+            return None
+        return max(0.0, self.order_quantity - self.filled_quantity)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "client_order_id": self.client_order_id,
             "status": self.status,
+            "order_quantity": self.order_quantity,
             "filled_quantity": self.filled_quantity,
+            "remaining_quantity": self.remaining_quantity,
+            "has_fill": self.has_fill,
             "is_filled": self.is_filled,
+            "is_partial_fill": self.is_partial_fill,
+            "is_terminal": self.is_terminal,
             "is_terminal_unfilled": self.is_terminal_unfilled,
-            "raw_response": self.raw_response,
         }
 
 
@@ -252,6 +308,33 @@ def _find_first_value(value: Any, *names: str, default: Any = None) -> Any:
     return default
 
 
+def _documented_order_groups(response: Any) -> list[dict[str, Any]]:
+    """Validate the official open/history array-of-groups response shape."""
+    if not isinstance(response, list):
+        raise BrokerValidationError("Webull order query must return an array")
+    groups: list[dict[str, Any]] = []
+    for group in response:
+        if not isinstance(group, dict):
+            raise BrokerValidationError("Webull order query groups must be objects")
+        group_client_order_id = group.get("client_order_id")
+        if (
+            not isinstance(group_client_order_id, str)
+            or re.fullmatch(r"[A-Za-z0-9_-]{1,32}", group_client_order_id) is None
+        ):
+            raise BrokerValidationError(
+                "Webull order query group has an invalid client_order_id"
+            )
+        orders = group.get("orders")
+        if not isinstance(orders, list):
+            raise BrokerValidationError("Webull order query group.orders must be an array")
+        if any(not isinstance(order, dict) for order in orders):
+            raise BrokerValidationError(
+                "Webull order query group.orders must contain objects"
+            )
+        groups.append(group)
+    return groups
+
+
 def _normalize_symbol(value: Any) -> str:
     """Normalize Webull symbols while preserving exact ticker boundaries."""
     normalized = str(value or "").strip().upper()
@@ -313,47 +396,34 @@ def _extract_symbol_scoped_number(
     return None
 
 
-def _response_json_or_raise(response: Any) -> Any:
-    """Unwrap an SDK response — raise ``BrokerHTTPError`` on failure."""
-    _record_metric("api_calls")
-    status_code = getattr(response, "status_code", None)
-    if status_code is None:
-        return response
+def _call_gateway(fn, /, *args, **kwargs):
+    """Invoke the sanitized Manual-compatible gateway.
 
-    if status_code < 200 or status_code >= 300:
-        text = getattr(response, "text", repr(response))
-        raise BrokerHTTPError(status_code, text)
-
-    try:
-        return response.json()
-    except Exception as exc:
-        raise BrokerValidationError(
-            f"Webull HTTP {status_code} returned invalid JSON"
-        ) from exc
-
-
-def _call_sdk(fn, /, *args, **kwargs):
-    """Invoke a Webull SDK method, translating SDK exceptions to broker errors.
-
-    The SDK never returns a non-2xx response object — ``client.get_response``
-    raises ``ServerException`` (any upstream HTTP error, e.g. 504
-    GATEWAY_TIMEOUT) or ``ClientException`` (network-level failure) instead.
-    Without this translation those exceptions bypass ``_retry`` (which only
-    understands broker exceptions) and surface as generic 500s in the handler
-    instead of retryable ``BROKER_ERROR`` 502s.
+    The gateway deliberately strips raw SDK messages/headers.  Translate its
+    typed failures into the broker errors used by retry and HTTP orchestration
+    without reintroducing the original exception as an inspectable cause.
     """
-    from webull.core.exception.exceptions import ClientException, ServerException
+    from webull_api import (
+        WebullApiProtocolError,
+        WebullApiUpstreamError,
+        WebullApiValidationError,
+    )
 
+    _record_metric("api_calls")
     try:
         return fn(*args, **kwargs)
-    except ServerException as exc:
-        try:
-            status_code = int(exc.http_status)
-        except (TypeError, ValueError):
-            status_code = 502  # unknown upstream failure — treat as retryable
-        raise BrokerHTTPError(status_code, str(exc)) from exc
-    except ClientException as exc:
-        raise BrokerConnectionError(str(exc)) from exc
+    except WebullApiUpstreamError as exc:
+        if exc.status_code is not None:
+            code = f" code={exc.error_code}" if exc.error_code else ""
+            failure: BrokerError = BrokerHTTPError(
+                exc.status_code,
+                f"sanitized upstream failure{code}",
+            )
+        else:
+            failure = BrokerConnectionError(str(exc))
+    except (WebullApiProtocolError, WebullApiValidationError) as exc:
+        failure = BrokerValidationError(str(exc))
+    raise failure from None
 
 
 def _preview_rejection_reason(preview_response: Any) -> str | None:
@@ -366,24 +436,60 @@ def _preview_rejection_reason(preview_response: Any) -> str | None:
     as an error envelope even under HTTP 200. Surfacing that reason lets the
     caller skip placement instead of logging a phantom submission.
 
-    Conservative by design: only flags a rejection on an explicit terminal
-    status, or an error message that arrives *without* any cost estimate, so a
-    normal successful preview is never mistaken for a reject.
+    The official Thailand preview success schema contains both estimated cost
+    and estimated transaction fee. Anything else is not authorization to place
+    an order, even when the transport returned HTTP 200.
     """
-    if preview_response is None:
-        return None
+    if not isinstance(preview_response, dict):
+        return "preview response is not a JSON object"
 
-    status = _find_first_value(preview_response, *ORDER_STATUS_FIELDS, default=None)
+    status = _get_value(preview_response, *ORDER_STATUS_FIELDS, default=None)
     if status not in (None, "") and str(status).strip().upper() in REJECTED_ORDER_STATUSES:
         return f"preview status {status}"
 
-    has_estimate = _find_first_value(
-        preview_response, *PREVIEW_ESTIMATE_FIELDS, default=None
-    ) not in (None, "")
-    if not has_estimate:
-        reason = _find_first_value(preview_response, *ORDER_REASON_FIELDS, default=None)
-        if reason not in (None, ""):
-            return str(reason)
+    # The Thailand OpenAPI success contract uses these exact snake_case,
+    # top-level fields.  Do not accept aliases: a shape drift must stop before
+    # placement instead of being mistaken for a successful preview.
+    cost = preview_response.get("estimated_cost")
+    fee = preview_response.get("estimated_transaction_fee")
+    has_cost = isinstance(cost, str) and bool(cost.strip())
+    has_fee = isinstance(fee, str) and bool(fee.strip())
+    if not (has_cost and has_fee):
+        code = _get_value(
+            preview_response,
+            "error_code",
+            "errorCode",
+            "code",
+            default=None,
+        )
+        safe_code = (
+            code.strip()
+            if isinstance(code, str)
+            and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", code.strip())
+            else None
+        )
+        message = _get_value(
+            preview_response,
+            "error_msg",
+            "errorMsg",
+            "msg",
+            "message",
+            default=None,
+        )
+        safe_message = None
+        if isinstance(message, str):
+            safe_message = " ".join(message.split())[:160]
+            safe_message = re.sub(r"\b\d{8,}\b", "[redacted-id]", safe_message)
+            safe_message = re.sub(
+                r"\b[A-Fa-f0-9]{24,}\b",
+                "[redacted-token]",
+                safe_message,
+            )
+        if safe_code and safe_message:
+            return f"preview rejected ({safe_code}): {safe_message}"
+        if safe_code:
+            return f"preview rejected ({safe_code})"
+        return "preview response is missing required cost/fee estimates"
     return None
 
 
@@ -486,36 +592,6 @@ def _retry(max_attempts: int = 3, base_delay: float = 1.0, max_jitter: float = 0
 
 
 # ---------------------------------------------------------------------------
-# Connection pool — shared I/O executor, reused across invocations
-# ---------------------------------------------------------------------------
-
-_executor_lock = threading.Lock()
-_executor: ThreadPoolExecutor | None = None
-
-
-def _get_executor() -> ThreadPoolExecutor:
-    global _executor
-    if _executor is None:
-        with _executor_lock:
-            if _executor is None:
-                _executor = ThreadPoolExecutor(
-                    max_workers=4,
-                    thread_name_prefix="broker-io",
-                )
-                atexit.register(_shutdown_executor)
-    return _executor
-
-
-def _shutdown_executor() -> None:
-    """Graceful shutdown — release worker threads at instance teardown."""
-    global _executor
-    with _executor_lock:
-        if _executor is not None:
-            _executor.shutdown(wait=False, cancel_futures=True)
-            _executor = None
-
-
-# ---------------------------------------------------------------------------
 # Connection cache — warm start reuse (thread-safe)
 # ---------------------------------------------------------------------------
 
@@ -555,43 +631,153 @@ def get_broker(config) -> "WebullBroker":
 class WebullBroker:
     """Single, consolidated interface to the Webull trading API.
 
-    Supports configurable API versions (v2 / v3) and optional order preview.
-    Includes retry logic, connection caching, and parallel data fetching.
+    Delegates every Webull operation to the Manual-compatible gateway, while
+    adding strategy-level retry, parsing, caching, and lifecycle semantics.
     """
 
     def __init__(self, config):
-        from webull.core.client import ApiClient
-        from webull.data.data_client import DataClient
-        from webull.trade.trade_client import TradeClient
+        from webull_api import WebullApiGateway
 
         self.config = config
         self.account_id = config.account_id
-        self.api_client = ApiClient(config.app_key, config.app_secret, config.region)
-        self.api_client.add_endpoint(config.region, config.endpoint)
-        if config.token_dir:
-            self.api_client.set_token_dir(config.token_dir)
-
-        self.data_client = DataClient(self.api_client)
-        self.trade_client = TradeClient(self.api_client)
+        self.gateway = WebullApiGateway(config)
+        self.validate_authenticated_account()
 
     # ---- public API -------------------------------------------------------
+
+    @_retry()
+    def get_account_list(self) -> Any:
+        return _call_gateway(self.gateway.get_account_list)
+
+    @_retry()
+    def get_account_balance(self) -> Any:
+        return _call_gateway(self.gateway.get_account_balance)
+
+    @_retry()
+    def get_positions(self) -> Any:
+        return _call_gateway(self.gateway.get_positions)
+
+    @_retry()
+    def get_quote(self, symbol: str) -> Any:
+        return _call_gateway(self.gateway.get_quote, symbol)
+
+    @_retry()
+    def get_open_orders(
+        self,
+        page_size: int = OPEN_ORDER_PAGE_SIZE,
+        last_client_order_id: str | None = None,
+    ) -> Any:
+        return _call_gateway(
+            self.gateway.get_open_orders,
+            page_size=page_size,
+            last_client_order_id=last_client_order_id,
+        )
+
+    @_retry()
+    def get_order_history(
+        self,
+        page_size: int = 20,
+        start_date: str | None = None,
+        last_client_order_id: str | None = None,
+    ) -> Any:
+        return _call_gateway(
+            self.gateway.get_order_history,
+            page_size=page_size,
+            start_date=start_date,
+            last_client_order_id=last_client_order_id,
+        )
+
+    @_retry()
+    def get_order_detail(self, client_order_id: str) -> Any:
+        return _call_gateway(self.gateway.get_order_detail, client_order_id)
+
+    def cancel_order(self, client_order_id: str) -> dict[str, Any]:
+        """Cancel exactly once, correlate the flat reply, then confirm detail."""
+        try:
+            response = _call_gateway(self.gateway.cancel_order, client_order_id)
+        except Exception:
+            raise OrderCancellationUnknownError(
+                "Webull order-cancellation outcome is unknown"
+            ) from None
+
+        if (
+            not isinstance(response, dict)
+            or response.get("client_order_id") != client_order_id
+            or not isinstance(response.get("order_id"), str)
+            or not response["order_id"].strip()
+        ):
+            raise OrderCancellationUnknownError(
+                "Webull cancel response did not correlate the client_order_id"
+            )
+
+        latest: OrderStatus | None = None
+        for attempt in range(1, CANCEL_CONFIRM_ATTEMPTS + 1):
+            try:
+                latest = self.get_order_status(client_order_id)
+            except BrokerError:
+                latest = None
+            else:
+                if latest.normalized_status in {"CANCELLED", "CANCELED"}:
+                    return {
+                        "client_order_id": client_order_id,
+                        "order_id": response["order_id"].strip(),
+                        "status": latest.normalized_status,
+                        "filled_quantity": latest.filled_quantity,
+                    }
+                if latest.is_terminal:
+                    raise BrokerValidationError(
+                        "Webull order reached a terminal state other than CANCELLED"
+                    )
+            if attempt < CANCEL_CONFIRM_ATTEMPTS:
+                time.sleep(CANCEL_CONFIRM_INTERVAL_SECONDS)
+
+        raise OrderCancellationUnknownError(
+            "Webull cancellation was accepted but not confirmed by order detail"
+        )
+
+    @_retry()
+    def preview_market_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        client_order_id: str,
+    ) -> Any:
+        payload = self._build_market_order_payload(
+            symbol.strip().upper(),
+            side.strip().upper(),
+            quantity,
+            client_order_id,
+        )
+        return _call_gateway(self.gateway.preview_market_order, payload)
+
+    def validate_authenticated_account(self) -> Any:
+        """Prove the configured account belongs to the authenticated app."""
+        response = self.get_account_list()
+        account_ids = {
+            str(_get_value(item, *ACCOUNT_ID_FIELDS, default="")).strip()
+            for item in _iter_dicts(response)
+        }
+        if self.account_id not in account_ids:
+            raise BrokerValidationError(
+                "Configured WEBULL_ACCOUNT_ID is not present in account list"
+            )
+        return response
 
     def get_position_and_price(self, symbol: str) -> MarketState:
         """Fetch current position quantity and last price for *symbol*.
 
-        Position and price are fetched concurrently on the shared pool.
+        Position and price are fetched sequentially, matching the proven
+        Manual Test Lab flow. The SDK does not document one ``ApiClient`` as
+        thread-safe, so concurrent signing through the same client is avoided.
         Raises ``BrokerValidationError`` when the upstream data is unusable
         (non-positive or non-finite price), so bad market data surfaces as
         a 502 instead of an internal error deeper in the strategy.
         """
         normalized = symbol.upper()
 
-        pool = _get_executor()
-        future_qty = pool.submit(self._fetch_quantity, normalized)
-        future_price = pool.submit(self._fetch_last_price, normalized)
-
-        quantity = float(future_qty.result())
-        last_price = float(future_price.result())
+        quantity = float(self._fetch_quantity(normalized))
+        last_price = float(self._fetch_last_price(normalized))
 
         if not math.isfinite(quantity) or quantity < 0:
             raise BrokerValidationError(
@@ -620,7 +806,6 @@ class WebullBroker:
             )
         return quantity
 
-    @_retry()
     def has_open_order(self, symbol: str) -> bool:
         """Return whether Webull reports an active order for *symbol*.
 
@@ -629,18 +814,49 @@ class WebullBroker:
         order while a previously accepted order has not filled yet.
         """
         normalized = _normalize_symbol(symbol)
-        order_api = self._order_api()
-        response = _response_json_or_raise(
-            _call_sdk(
-                order_api.get_order_open,
-                self.account_id,
+        cursor: str | None = None
+        seen_cursors: set[str] = set()
+
+        for _ in range(OPEN_ORDER_MAX_PAGES):
+            response = self.get_open_orders(
                 page_size=OPEN_ORDER_PAGE_SIZE,
+                last_client_order_id=cursor,
             )
-        )
-        return any(
-            _normalize_symbol(_get_value(item, *SYMBOL_FIELDS, default=""))
-            == normalized
-            for item in _iter_dicts(response)
+            groups = _documented_order_groups(response)
+            for group in groups:
+                for order in group["orders"]:
+                    instrument_type = order.get("instrument_type")
+                    order_symbol = order.get("symbol")
+                    if not isinstance(instrument_type, str) or not instrument_type:
+                        raise BrokerValidationError(
+                            "Webull open order is missing instrument_type"
+                        )
+                    if not isinstance(order_symbol, str) or not order_symbol:
+                        raise BrokerValidationError(
+                            "Webull open order is missing symbol"
+                        )
+                    # The unified Webull schema names the request instrument
+                    # type EQUITY, while its stock-response example also uses
+                    # STOCK. Both represent the same US-equity risk here.
+                    if (
+                        instrument_type.strip().upper() in EQUITY_INSTRUMENT_TYPES
+                        and _normalize_symbol(order_symbol) == normalized
+                    ):
+                        return True
+
+            if len(groups) < OPEN_ORDER_PAGE_SIZE:
+                return False
+
+            next_cursor = groups[-1]["client_order_id"]
+            if next_cursor in seen_cursors or next_cursor == cursor:
+                raise BrokerValidationError(
+                    "Webull open-order pagination repeated its cursor"
+                )
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+
+        raise BrokerValidationError(
+            "Webull open-order pagination exceeded the safety page limit"
         )
 
     @_retry()
@@ -656,19 +872,79 @@ class WebullBroker:
         ACCEPTED (returned an id) from one it actually FILLED, closing the gap
         that let a SELL log as submitted while the held quantity never moved.
         """
-        order_api = self._order_api()
-        response = _response_json_or_raise(
-            _call_sdk(
-                order_api.get_order_detail,
-                self.account_id,
-                client_order_id,
+        response = _call_gateway(self.gateway.get_order_detail, client_order_id)
+        if not isinstance(response, dict):
+            raise BrokerValidationError(
+                "Webull order detail must return one group object"
             )
-        )
-        status = _find_first_value(response, *ORDER_STATUS_FIELDS, default="UNKNOWN")
-        raw_filled = _find_first_value(response, *FILLED_QUANTITY_FIELDS, default=None)
+        order = self._find_correlated_order(response, client_order_id)
+        if order is None:
+            raise BrokerValidationError(
+                "Webull order detail did not contain the requested client_order_id"
+            )
+        return self._order_status_from_record(order, client_order_id)
+
+    def lookup_order_status(self, client_order_id: str) -> OrderStatus | None:
+        """Resolve an ambiguous submission via detail, open orders, and history.
+
+        ``None`` means all fallback reads succeeded but none contained the exact
+        client_order_id. It never authorizes a resubmission; the caller keeps a
+        visible manual-review lifecycle until an operator resolves it.
+        """
+        responses: list[Any] = []
+        try:
+            detail_response = self.get_order_detail(client_order_id)
+        except BrokerHTTPError as exc:
+            if exc.status_code != 404:
+                raise
+        else:
+            if not isinstance(detail_response, dict):
+                raise BrokerValidationError(
+                    "Webull order detail must return one group object"
+                )
+            responses.append(detail_response)
+
+        open_response = self.get_open_orders(page_size=OPEN_ORDER_PAGE_SIZE)
+        history_response = self.get_order_history(page_size=OPEN_ORDER_PAGE_SIZE)
+        _documented_order_groups(open_response)
+        _documented_order_groups(history_response)
+        responses.extend((open_response, history_response))
+        for response in responses:
+            order = self._find_correlated_order(response, client_order_id)
+            if order is not None:
+                return self._order_status_from_record(order, client_order_id)
+        return None
+
+    @staticmethod
+    def _find_correlated_order(
+        response: Any,
+        client_order_id: str,
+    ) -> dict[str, Any] | None:
+        from webull_api import WebullApiProtocolError, find_order_by_client_order_id
+
+        try:
+            return find_order_by_client_order_id(response, client_order_id)
+        except WebullApiProtocolError as exc:
+            raise BrokerValidationError(str(exc)) from None
+
+    @staticmethod
+    def _order_status_from_record(
+        order: dict[str, Any],
+        client_order_id: str,
+    ) -> OrderStatus:
+
+        status = _find_first_value(order, *ORDER_STATUS_FIELDS, default="UNKNOWN")
+        raw_filled = _find_first_value(order, *FILLED_QUANTITY_FIELDS, default=None)
         filled_quantity = (
             _coerce_number(raw_filled, "filled quantity")
             if raw_filled not in (None, "") else 0.0
+        )
+        raw_order_quantity = _find_first_value(
+            order, *ORDER_QUANTITY_FIELDS, default=None
+        )
+        order_quantity = (
+            _coerce_number(raw_order_quantity, "order quantity")
+            if raw_order_quantity not in (None, "") else None
         )
         if filled_quantity < 0:
             raise BrokerValidationError(
@@ -678,7 +954,8 @@ class WebullBroker:
             client_order_id=client_order_id,
             status=str(status),
             filled_quantity=filled_quantity,
-            raw_response=response,
+            raw_response=order,
+            order_quantity=order_quantity,
         )
 
     def place_market_order(
@@ -705,69 +982,105 @@ class WebullBroker:
             quantity=quantity,
             client_order_id=client_order_id,
         )
-        order_api = self._order_api()
 
         # Preview-gate (the Manual Test Lab flow: preview, then submit only if
         # the preview is acceptable). This is what catches an order Webull will
         # not take — e.g. a fractional quantity or a closed market — *before* a
         # phantom "submitted" is logged against an unchanged position.
-        preview_response = None
-        if self.config.preview_orders:
-            try:
-                preview_response = self._preview_market_order(order_api, order_payload)
-            except BrokerHTTPError as exc:
-                if exc.status_code < 500 and not _is_retryable_http(exc):
-                    _record_metric("errors")
-                    logger.warning(
-                        "Order preview rejected (not placing): side=%s qty=%s "
-                        "symbol=%s coid=%s http=%d",
-                        side, quantity, symbol, client_order_id, exc.status_code,
-                    )
-                    return OrderResult(
-                        client_order_id=client_order_id,
-                        order_id=None,
-                        status="PREVIEW_REJECTED",
-                        preview={"error": exc.body},
-                        raw_response=None,
-                        accepted=False,
-                        reason=f"preview rejected (HTTP {exc.status_code}): "
-                        f"{str(exc.body)[:300]}",
-                    )
-                raise
-            preview_reason = _preview_rejection_reason(preview_response)
-            if preview_reason is not None:
+        try:
+            preview_response = self._preview_market_order(order_payload)
+        except BrokerHTTPError as exc:
+            if exc.status_code < 500 and not _is_retryable_http(exc):
                 _record_metric("errors")
                 logger.warning(
-                    "Order preview not acceptable (not placing): side=%s qty=%s "
-                    "symbol=%s coid=%s reason=%s",
-                    side, quantity, symbol, client_order_id, preview_reason,
+                    "Order preview rejected (not placing): side=%s qty=%s "
+                    "symbol=%s coid=%s http=%d",
+                    side, quantity, symbol, client_order_id, exc.status_code,
                 )
                 return OrderResult(
                     client_order_id=client_order_id,
                     order_id=None,
                     status="PREVIEW_REJECTED",
-                    preview=preview_response,
+                    preview={"accepted": False},
                     raw_response=None,
                     accepted=False,
-                    reason=preview_reason,
+                    reason=f"preview rejected (HTTP {exc.status_code})",
                 )
+            raise
+        preview_reason = _preview_rejection_reason(preview_response)
+        if preview_reason is not None:
+            _record_metric("errors")
+            logger.warning(
+                "Order preview not acceptable (not placing): side=%s qty=%s "
+                "symbol=%s coid=%s reason=%s",
+                side, quantity, symbol, client_order_id, preview_reason,
+            )
+            return OrderResult(
+                client_order_id=client_order_id,
+                order_id=None,
+                status="PREVIEW_REJECTED",
+                preview=preview_response,
+                raw_response=None,
+                accepted=False,
+                reason=preview_reason,
+            )
 
         logger.info(
             "Placing order: side=%s qty=%s symbol=%s coid=%s",
             side, quantity, symbol, client_order_id,
         )
-        response = _response_json_or_raise(
-            _call_sdk(order_api.place_order, self.account_id, order_payload)
-        )
+        try:
+            response = _call_gateway(self.gateway.place_market_order, order_payload)
+        except Exception:
+            _record_metric("errors")
+            # Once the place call begins, a timeout/5xx/protocol failure cannot
+            # prove whether Webull booked the order. Preserve the intent and
+            # reconcile this exact client_order_id; never submit a replacement.
+            raise OrderSubmissionUnknownError(
+                "Webull market-order submission outcome is unknown"
+            ) from None
 
-        order_id = _find_first_value(response, *ORDER_ID_FIELDS)
-        status = _find_first_value(
-            response, *ORDER_STATUS_FIELDS,
-            default="SUBMITTED" if order_id else "UNKNOWN",
+        # Unlike list/detail responses, the official Thailand place response
+        # is one flat object. Correlate direct scalar fields only; recursive
+        # lookup could borrow an unrelated nested id.
+        if not isinstance(response, dict):
+            _record_metric("errors")
+            raise OrderSubmissionUnknownError(
+                "Webull place response did not correlate the submitted client_order_id"
+            )
+        response_client_order_id = response.get("client_order_id")
+        if response_client_order_id != client_order_id:
+            _record_metric("errors")
+            raise OrderSubmissionUnknownError(
+                "Webull place response did not correlate the submitted client_order_id"
+            )
+
+        raw_order_id = response.get("order_id")
+        order_id = (
+            raw_order_id.strip()
+            if isinstance(raw_order_id, str) and raw_order_id.strip()
+            else None
         )
-        accepted = order_id is not None and str(status).strip().upper() not in (
-            REJECTED_ORDER_STATUSES
+        raw_status = response.get("status")
+        if raw_status not in (None, "") and not (
+            isinstance(raw_status, str) and raw_status.strip()
+        ):
+            _record_metric("errors")
+            raise OrderSubmissionUnknownError(
+                "Webull place response contained an invalid status"
+            )
+        status = (
+            raw_status.strip()
+            if isinstance(raw_status, str) and raw_status.strip()
+            else ("SUBMITTED" if order_id else "UNKNOWN")
         )
+        rejected = str(status).strip().upper() in REJECTED_ORDER_STATUSES
+        if order_id is None and not rejected:
+            _record_metric("errors")
+            raise OrderSubmissionUnknownError(
+                "Webull correlated place response did not contain an order_id"
+            )
+        accepted = order_id is not None and not rejected
         # Only a genuinely accepted order counts toward the placed metric —
         # otherwise the counter would imply trades that never hit the book.
         if accepted:
@@ -776,8 +1089,8 @@ class WebullBroker:
             _record_metric("errors")
             logger.warning(
                 "Order not accepted by Webull: side=%s qty=%s symbol=%s "
-                "coid=%s status=%s response=%r",
-                side, quantity, symbol, client_order_id, status, response,
+                "coid=%s status=%s",
+                side, quantity, symbol, client_order_id, status,
             )
 
         return OrderResult(
@@ -787,10 +1100,7 @@ class WebullBroker:
             preview=preview_response,
             raw_response=response,
             accepted=accepted,
-            reason=None if accepted else _find_first_value(
-                response, *ORDER_REASON_FIELDS,
-                default="Webull returned no order id",
-            ),
+            reason=None if accepted else "Webull rejected the correlated order",
         )
 
     # ---- private: data fetching -------------------------------------------
@@ -798,43 +1108,25 @@ class WebullBroker:
     @_retry()
     def _fetch_quantity(self, symbol: str) -> float:
         """Fetch position quantity for *symbol*."""
-        positions_response = _response_json_or_raise(
-            _call_sdk(
-                self.trade_client.account_v2.get_account_position,
-                self.account_id,
-            )
-        )
+        positions_response = _call_gateway(self.gateway.get_positions)
         return self._extract_quantity(positions_response, symbol)
 
     @_retry()
     def _fetch_last_price(self, symbol: str) -> float:
         """Fetch last traded price for *symbol*."""
-        quote_response = _response_json_or_raise(
-            _call_sdk(
-                self.data_client.market_data.get_snapshot,
-                symbol,
-                US_STOCK_CATEGORY,
-                extend_hour_required=False,
-                overnight_required=False,
-            )
+        quote_response = _call_gateway(self.gateway.get_quote, symbol)
+        return self._extract_last_price(
+            quote_response,
+            symbol,
+            self.config.support_trading_session,
         )
-        return self._extract_last_price(quote_response, symbol)
 
     @_retry()
-    def _preview_market_order(self, order_api: Any, order_payload: Any) -> Any:
+    def _preview_market_order(self, order_payload: Any) -> Any:
         """Preview is idempotent and can safely recover from 417/5xx errors."""
-        return _response_json_or_raise(
-            _call_sdk(order_api.preview_order, self.account_id, order_payload)
-        )
+        return _call_gateway(self.gateway.preview_market_order, order_payload)
 
     # ---- private: order building ------------------------------------------
-
-    def _order_api(self) -> Any:
-        api_name = f"order_{self.config.api_version}"
-        order_api = getattr(self.trade_client, api_name, None)
-        if order_api is None:
-            raise BrokerError(f"Webull SDK does not expose {api_name}")
-        return order_api
 
     def _build_market_order_payload(
         self,
@@ -891,21 +1183,44 @@ class WebullBroker:
         return quantity
 
     @staticmethod
-    def _extract_last_price(response: Any, symbol: str) -> float:
-        price = _extract_symbol_scoped_number(
-            response,
-            symbol,
-            LAST_PRICE_FIELDS,
-            "last price",
-        )
-        if price is not None:
-            return price
+    def _extract_last_price(
+        response: Any,
+        symbol: str,
+        trading_session: str = "CORE",
+    ) -> float:
+        fields = SNAPSHOT_PRICE_FIELDS_BY_SESSION.get(trading_session.upper())
+        if fields is None:
+            raise BrokerValidationError("Unsupported trading session for quote parsing")
 
-        # Snapshot responses from some SDK versions omit the symbol because
-        # the request already identifies it. Accept only an unambiguous price.
-        prices: list[float] = []
-        for record in reversed(list(_iter_dicts(response))):
-            raw_price = _get_value(record, *LAST_PRICE_FIELDS, default=None)
-            if raw_price not in (None, ""):
-                prices.append(_coerce_number(raw_price, "last price"))
-        return prices[0] if len(prices) == 1 else 0.0
+        # Explicit priority is session-aware and never falls back to the prior
+        # close. During CORE, only the official live `price` can authorize a
+        # trade; extended/overnight modes use their documented fields.
+        matching_records = [
+            record
+            for record in _iter_dicts(response)
+            if _normalize_symbol(record.get("symbol")) == _normalize_symbol(symbol)
+        ]
+        if len(matching_records) > 1:
+            raise BrokerValidationError(
+                f"Webull returned multiple snapshots for {_normalize_symbol(symbol)}"
+            )
+        for field_name in fields:
+            if matching_records:
+                raw_price = matching_records[0].get(field_name)
+                if raw_price not in (None, ""):
+                    return _coerce_number(raw_price, "last price")
+                continue
+
+            # Some SDK snapshots omit symbol because the request identifies it.
+            candidates: list[float] = []
+            for record in _iter_dicts(response):
+                raw_price = record.get(field_name)
+                if raw_price not in (None, ""):
+                    candidates.append(_coerce_number(raw_price, "last price"))
+            if len(candidates) == 1:
+                return candidates[0]
+            if len(candidates) > 1:
+                raise BrokerValidationError(
+                    f"Webull returned ambiguous {field_name} values"
+                )
+        return 0.0

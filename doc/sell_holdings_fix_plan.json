@@ -1,94 +1,369 @@
 {
-  "framework": "5-step-process",
-  "language": "th",
-  "revision": "rev.5 — ใช้ order API version เดียวกับ place (v3 สำหรับ Webull TH), poll Order detail แบบ bounded และ reconcile Positions หลัง fill เพื่ออัปเดตจำนวนถือครองในแถวเดียวกัน",
+  "planner": "five-step-planner",
+  "version": "6.0",
+  "updated_at": "2026-07-14",
+  "scope": "Webull Thailand API overhaul and durable dashboard order lifecycle",
+  "repository": "firstnattapon/webull",
+  "branch": "codex/fix-webull-order-reconcile",
   "step_1_goals": {
-    "raw_goal": "ส่ง order แล้วจำนวนถือครองไม่เปลี่ยน — แก้ไขตามแนวทาง API ของ Manual Test Lab",
-    "refined_goal": "หลัง place ทุกครั้ง ให้บอท poll สถานะจริงผ่าน order API ที่รองรับ Webull TH แล้วอ่าน Positions หลัง fill; log ORDER_FILLED เฉพาะ filled_quantity>0 พร้อมจำนวนถือครองหลัง order, ORDER_NOT_FILLED เมื่อ terminal+0, และ ORDER_SUBMITTED เฉพาะที่ยังค้าง",
-    "target_metric": { "name": "log สะท้อนการ fill จริง + มองเห็นออร์เดอร์ที่ 'รับแต่ไม่ fill'", "current": 0, "target": 1, "unit": "สัดส่วน", "horizon": "รอบ deploy ถัดไป" },
+    "status": "complete",
+    "objective": "ใช้ flow ของ Manual Test Lab เป็นฐานสำหรับ authenticated connection, account, balance, positions, quote, open orders, history, detail, preview, place และ cancel พร้อมทำให้ order/position บน Dashboard อัปเดตต่อเนื่องข้าม invocation",
     "success_criteria": [
-      "หลัง place บอทเรียก order_v3.get_order_detail สำหรับ Webull TH (flow เดียวกับ Order detail ใน Manual Test Lab) เพื่ออ่าน status + filled_quantity",
-      "filled_quantity>0 => ORDER_FILLED; terminal+0 filled => ORDER_NOT_FILLED + เหตุผล; ยังค้าง => ORDER_SUBMITTED",
-      "การยืนยันเป็น best-effort: อ่านไม่ได้ก็ไม่ทำให้ tick ล้ม (fill_verified=false)",
-      "หลัง ORDER_FILLED บอทอ่าน Positions และอัปเดต market_state.quantity ในแถวเดียวกัน พร้อม position_reconciled=true เมื่อ delta ตรงภายใน epsilon"
+      {
+        "id": "G1",
+        "criterion": "Webull TH ใช้ account_v2 สำหรับ account data และ order_v3 สำหรับ order lifecycle ทุกเมธอด",
+        "required": true
+      },
+      {
+        "id": "G2",
+        "criterion": "ทุก automated market order ต้อง preview payload เดียวกันก่อน place และ place/cancel ห้าม retry แบบ blind",
+        "required": true
+      },
+      {
+        "id": "G3",
+        "criterion": "หนึ่ง client_order_id อัปเดต Firestore document เดิมจนเป็น terminal; partial fill ต้องไม่ถูกนับเป็น full fill",
+        "required": true
+      },
+      {
+        "id": "G4",
+        "criterion": "SDK ห้ามสร้าง webull_*_sdk.log หรือ token ใน repository และ exception/log/HTTP/Firestore ต้องไม่มี credential หรือ signed headers",
+        "required": true
+      },
+      {
+        "id": "G5",
+        "criterion": "offline regression, security, lifecycle และ harness tests ผ่านทั้งหมด",
+        "required": true
+      },
+      {
+        "id": "G6",
+        "criterion": "real-network UAT read-preview ผ่าน account binding, balance, positions, quote, open, history, detail และ MARKET preview",
+        "required": true
+      },
+      {
+        "id": "G7",
+        "criterion": "armed UAT mutation พิสูจน์ MARKET place/detail/position refresh และ LIMIT place/cancel/detail/open roundtrip",
+        "required": true
+      }
+    ],
+    "constraints": [
+      "Credential มาจาก process environment หรือ secure PowerShell prompt เท่านั้น",
+      "ไม่เขียน credential ลง source, .env, planner, fixture, log หรือ command line",
+      "credentials ที่ผู้ใช้ให้เป็น shared UAT Test account ตามหน้า SDK ไม่ใช่ production credential",
+      "UAT พิสูจน์ API contract ได้ แต่พิสูจน์เงินจริงหรือ production routing ไม่ได้",
+      "ห้าม cancel order ที่ไม่ได้สร้างโดย live-test run เดียวกัน"
     ]
   },
-  "evidence_from_latest_log": [
-    "3 SELL ของบอท (14:20–14:30, qty~0.10 ต่อไม้) => holding คงที่ 4.773",
-    "holding ขยับ 4.773 -> 3.773 (พอดี -1.0 หุ้นเต็ม) ช่วง 15:00–15:10 ที่ 'ไม่มีออร์เดอร์บอท' = คำสั่งมือ SELL 1 หุ้นจาก Manual Test Lab",
-    "ทุก BUY ของบอทหลังจากนั้น (qty~0.95) => holding แช่ 3.773",
-    "3 SELL ติดกันไม่ถูก has_open_order บล็อก => ออร์เดอร์ที่ 'รับ' ไม่ได้ค้างเป็น open (ถูก drop/expire) และไม่ fill",
-    "สรุป: หุ้นเต็ม fill ได้ / ออร์เดอร์เศษหุ้นของบอท 'รับแต่ไม่ fill' — บอทไม่เคยตรวจสอบจึง log ว่า ORDER_SUBMITTED หลอกตา"
-  ],
-  "note_on_manual_test_lab": "Payload ของบอทกับ Manual Test Lab 'เหมือนกันทุกฟิลด์' (order_v3.place_order, entrust_type=QTY ฯลฯ) การจัด payload ให้ตรงจึงไม่เปลี่ยนอะไร — สิ่งที่ Manual Test Lab มีแต่บอทไม่มีคือ 'การยืนยัน' (ปุ่ม Order detail / Positions / History) หลักฐาน 0.05 ที่ 'accepted' คือแค่การรับ ไม่ใช่การ fill",
-  "step_2_problems": [
-    { "id": "P1", "description": "ออร์เดอร์เศษหุ้นของบอทถูกรับ (order_id) แต่ไม่ fill => ตำแหน่งไม่ขยับ", "gap_value": 0.31, "severity": 5 },
-    { "id": "P2", "description": "บอทวางออร์เดอร์แบบ blind: log ORDER_SUBMITTED โดยไม่เคยยืนยัน fill จริง => ดูเหมือนขายแต่หุ้นไม่ลด", "gap_value": null, "severity": 5 },
-    { "id": "P3", "description": "รันบน UAT อาจรับออร์เดอร์แต่ไม่ fill กับตำแหน่งจริง (ต้องแยกจาก P1 ด้วยการยืนยัน)", "gap_value": null, "severity": 4 }
-  ],
-  "step_3_diagnosis": [
-    {
-      "problem_id": "P2",
-      "root_causes": [
-        { "id": "RC1", "cause": "บอทไม่ยืนยันการ fill หลัง place (ต่างจาก Manual Test Lab ที่มี Order detail/Positions)", "why_chain": ["place สำเร็จ (order_id)","สมมติว่า = ซื้อ/ขายสำเร็จ","log ORDER_SUBMITTED ทันที","ไม่เคยอ่าน filled_quantity","ออร์เดอร์ที่ไม่ fill จึงมองไม่เห็น"], "impact_weight": 0.65, "evidence": "log ORDER_SUBMITTED ทุกไม้ แต่ holding นิ่ง; หุ้นเต็ม (มือ) fill ได้" }
-      ]
-    },
-    {
-      "problem_id": "P1",
-      "root_causes": [
-        { "id": "RC2", "cause": "ออร์เดอร์เศษหุ้น/สภาพตลาดทำให้ 'รับแต่ไม่ fill' (หรือ UAT ไม่ fill)", "why_chain": ["qty ไม่ขยับ","ออร์เดอร์ไม่ถูก fill","เศษหุ้นถูก drop/expire หรือ endpoint = UAT"], "impact_weight": 0.35, "evidence": "-1.0 หุ้นเต็มเท่านั้นที่ fill; เศษหุ้นบอทไม่ fill" }
-      ]
-    }
-  ],
-  "removed_root_causes": [
-    { "id": "RC_payload", "cause": "payload ต่างจาก Manual Test Lab", "reason_removed": "ตรวจแล้ว payload เหมือนกันทุกฟิลด์ (order_v3.place_order) — ไม่ใช่ต้นเหตุ" }
-  ],
-  "step_4_design": [
-    { "id": "S1", "targets_root_cause": "RC1", "intervention": "ให้ get_order_status/get_order_open ใช้ configured order API; default v3 รองรับ Webull TH และตรงกับ API ที่ place", "expected_effect": 0.8, "cost": 0.1, "priority_score": 8.0, "rank": 1 },
-    { "id": "S2", "targets_root_cause": "RC1", "intervention": "หลัง place ที่ accepted ให้ poll Order detail สูงสุด 3 ครั้งตาม rate limit แล้ว log ORDER_FILLED / ORDER_NOT_FILLED / ORDER_SUBMITTED ตาม filled_quantity และสถานะจริง", "expected_effect": 0.8, "cost": 0.1, "priority_score": 8.0, "rank": 2 },
-    { "id": "S3", "targets_root_cause": "RC1", "intervention": "ยืนยันเป็น best-effort (อ่านไม่ได้ => fill_verified=false, ไม่ล้ม tick, ไม่ roll back DNA step)", "expected_effect": 0.4, "cost": 0.05, "priority_score": 4.0, "rank": 4 },
-    { "id": "S4", "targets_root_cause": "RC2", "intervention": "แนบ filled_quantity/order_status + sandbox_note (UAT) + /health warning ให้แยกสาเหตุได้", "expected_effect": 0.5, "cost": 0.1, "priority_score": 5.0, "rank": 5 },
-    { "id": "S5", "targets_root_cause": "RC2", "intervention": "ตั้ง WEBULL_ENV=prod แล้ว deploy => ยืนยันว่า ORDER_FILLED ตรงกับ qty ที่ลดจริง", "expected_effect": 0.9, "cost": 0.15, "priority_score": 6.0, "rank": 6 },
-    { "id": "S6", "targets_root_cause": "RC1", "intervention": "หลัง filled_quantity>0 ให้ poll Account Positions แบบ bounded แล้วบันทึก position_before/after/delta และอัปเดต market_state.quantity ที่ Dashboard ใช้", "expected_effect": 0.9, "cost": 0.15, "priority_score": 6.0, "rank": 3 }
-  ],
+  "step_2_problems": {
+    "status": "complete",
+    "items": [
+      {
+        "id": "P1",
+        "severity": 5,
+        "problem": "โค้ดเดิมมีเฉพาะ position+quote, open แบบ boolean, detail และ place; ขาด account list, balance, raw positions, history, standalone preview และ cancel"
+      },
+      {
+        "id": "P2",
+        "severity": 5,
+        "problem": "post-order poll เพียงประมาณ 2 วินาทีแล้วจบ; order ที่ยัง SUBMITTED ไม่มี process ติดตามใน invocation ถัดไป"
+      },
+      {
+        "id": "P3",
+        "severity": 5,
+        "problem": "trade log ใช้ Firestore document ID แบบสุ่ม ทำให้ผล fill/position ภายหลังสร้างแถวใหม่หรือไม่อัปเดตแถวเดิมบน Dashboard"
+      },
+      {
+        "id": "P4",
+        "severity": 5,
+        "problem": "filled_quantity > 0 ถูกนับเป็น ORDER_FILLED ทันที แม้ status เป็น PARTIAL_FILLED"
+      },
+      {
+        "id": "P5",
+        "severity": 5,
+        "problem": "SDK 2.0.12 สร้าง console/file logger เองและอาจ serialize signed request headers; DataClient+TradeClient ทำ initialization ซ้ำ"
+      },
+      {
+        "id": "P6",
+        "severity": 4,
+        "problem": "WEBULL_ENV default เป็น uat, preview default ปิด และ custom endpoint สามารถเปลี่ยนปลายทาง credential ได้"
+      },
+      {
+        "id": "P7",
+        "severity": 4,
+        "problem": "client_order_id เดิมผูกเพียง strategy/symbol/DNA step จึงซ้ำได้หลัง reset/replay และ concurrent invocations สร้าง intent คนละตัวได้"
+      },
+      {
+        "id": "P8",
+        "severity": 5,
+        "problem": "หลักฐานเดิมคือ mocked unit tests เท่านั้น ไม่มี real-network contract harness"
+      }
+    ]
+  },
+  "step_3_diagnosis": {
+    "status": "complete",
+    "root_causes": [
+      {
+        "id": "RC1",
+        "weight": 0.32,
+        "cause": "broker ถูกออกแบบเป็น strategy helper ไม่ใช่ Manual-compatible API gateway",
+        "why_chain": [
+          "ไม่มี public account/balance/history/cancel methods",
+          "preview ถูกซ่อนและ optional",
+          "ไม่มี authenticated account ownership preflight",
+          "จึงวินิจฉัย API response จริงไม่ครบ"
+        ],
+        "evidence": "Manual gap audit ระบุ capability ที่หายไปและ current broker ลด raw orders เหลือ boolean"
+      },
+      {
+        "id": "RC2",
+        "weight": 0.34,
+        "cause": "order lifecycle ไม่มี durable state machine",
+        "why_chain": [
+          "poll detail แบบ synchronous และ bounded",
+          "SUBMITTED/PARTIAL_FILLED อาจอยู่นานกว่า invocation",
+          "PASS_OPEN_ORDER ไม่ reconcile order เก่า",
+          "ไม่มี pending intent สำหรับ invocation ถัดไป"
+        ],
+        "evidence": "main.py เดิม poll 3 ครั้งและหยุด; partial fill ทำให้ is_filled=true"
+      },
+      {
+        "id": "RC3",
+        "weight": 0.18,
+        "cause": "Dashboard persistence ไม่มี correlation key ที่เสถียร",
+        "why_chain": [
+          "write_trade_log สร้าง random document",
+          "later detail/position ไม่มี document เดิมให้ merge",
+          "Dashboard จึงเห็น row ค้างหรือ row ใหม่แทน lifecycle เดียว"
+        ],
+        "evidence": "state.py เดิมใช้ collection.document() โดยไม่ระบุ ID"
+      },
+      {
+        "id": "RC4",
+        "weight": 0.10,
+        "cause": "SDK initialization/logging defaults ไม่ปลอดภัยสำหรับ service",
+        "why_chain": [
+          "TradeClient/DataClient ต่างเรียก ClientInitializer",
+          "หากไม่มี logger SDK จะสร้าง stdout และ rotating file logger",
+          "error path สามารถแสดง request headers"
+        ],
+        "evidence": "ตรวจ source ของ webull-openapi-python-sdk 2.0.12 และพบ webull_trade_sdk.log จากการสร้าง client"
+      },
+      {
+        "id": "RC5",
+        "weight": 0.06,
+        "cause": "environment และ mutation consent ไม่ fail closed",
+        "why_chain": [
+          "ไม่ระบุ WEBULL_ENV ก็ไป UAT",
+          "preview ปิดโดย default",
+          "ไม่มี live integration guard ที่ผูก order params กับ account"
+        ],
+        "evidence": "config.py เดิม default uat/preview false และไม่มี live harness"
+      }
+    ],
+    "removed_hypotheses": [
+      {
+        "hypothesis": "payload ของ bot ต่างจาก Manual",
+        "reason": "field หลักของ MARKET QTY payload ตรงกัน; ปัญหาหลักอยู่ที่ lifecycle หลัง place"
+      },
+      {
+        "hypothesis": "เปลี่ยน order_v2 เป็น order_v3 เพียงอย่างเดียวจะแก้ Dashboard",
+        "reason": "SDK 2.0.12 สร้าง wire path open/detail คล้ายกัน; ไม่มี durable follow-up ก็ยังค้างได้"
+      }
+    ]
+  },
+  "step_4_design": {
+    "status": "complete",
+    "solutions": [
+      {
+        "rank": 1,
+        "id": "S1",
+        "targets": ["RC1", "RC4"],
+        "design": "WebullApiGateway: initialize TradeClient ครั้งเดียว, ใช้ MarketData โดยตรง, account_v2 + order_v3, public Manual methods ครบ, exact client_order_id correlation และ sanitized errors",
+        "expected_effect": 0.95,
+        "cost": 0.25,
+        "priority_score": 3.8
+      },
+      {
+        "rank": 2,
+        "id": "S2",
+        "targets": ["RC2", "RC3"],
+        "design": "Firestore durable lifecycle keyed ด้วย hash(client_order_id), transactionally mirror pending_order และ update document เดิมจน terminal",
+        "expected_effect": 0.98,
+        "cost": 0.30,
+        "priority_score": 3.27
+      },
+      {
+        "rank": 3,
+        "id": "S3",
+        "targets": ["RC2"],
+        "design": "ก่อน market/DNA gate ทุก invocation ให้ reconcile pending detail + positions; partial fill ไม่ terminal และ filled position read failure ต้อง retry invocation ถัดไป",
+        "expected_effect": 0.94,
+        "cost": 0.30,
+        "priority_score": 3.13
+      },
+      {
+        "rank": 4,
+        "id": "S4",
+        "targets": ["RC5"],
+        "design": "explicit WEBULL_ENV, official endpoint allowlist, region th, order v3, valid session, mandatory preview และ account fingerprint binding",
+        "expected_effect": 0.90,
+        "cost": 0.15,
+        "priority_score": 6.0
+      },
+      {
+        "rank": 5,
+        "id": "S5",
+        "targets": ["RC1", "RC5"],
+        "design": "metadata-only live UAT harness: read-preview default; MARKET mutation และ non-marketable LIMIT cancel เป็นโหมดแยกพร้อม exact arming/order binding",
+        "expected_effect": 0.92,
+        "cost": 0.25,
+        "priority_score": 3.68
+      },
+      {
+        "rank": 6,
+        "id": "S6",
+        "targets": ["RC2", "RC5"],
+        "design": "client_order_id ใส่ nonce และ Firestore transaction ปฏิเสธ second nonterminal intent ก่อนเรียก Webull",
+        "expected_effect": 0.88,
+        "cost": 0.15,
+        "priority_score": 5.87
+      }
+    ],
+    "state_machine": [
+      "ORDER_CREATED",
+      "ORDER_SUBMIT_UNKNOWN",
+      "ORDER_SUBMITTED",
+      "ORDER_PARTIAL_FILLED",
+      "ORDER_FILLED_POSITION_PENDING",
+      "ORDER_FILLED",
+      "ORDER_PARTIAL_FILLED_TERMINAL",
+      "ORDER_NOT_FILLED",
+      "ORDER_REJECTED"
+    ],
+    "safety_invariants": [
+      "place และ cancel เรียกครั้งเดียวต่อ intent",
+      "timeout หลัง place คือ ambiguous; query exact ID ภายหลังและห้าม resubmit",
+      "pending environment/account fingerprint ต้องตรงกับ runtime ปัจจุบัน",
+      "terminal callback เก่าห้าม clear pending intent ใหม่",
+      "raw signed request/credential ห้าม persist หรือ print"
+    ]
+  },
   "step_5_do_it": {
-    "action_plan": [
-      { "action": "broker.py: OrderStatus + configured v3 get_order_status/get_order_open + get_position_quantity", "owner": "code (PR นี้)", "start": "รอบนี้", "end": "เสร็จ", "depends_on": [] },
-      { "action": "main.py: bounded _verify_fill + _reconcile_position + log ORDER_FILLED/ORDER_NOT_FILLED/ORDER_SUBMITTED และอัปเดตจำนวนถือครองหลัง order", "owner": "code (PR นี้)", "start": "รอบนี้", "end": "เสร็จ", "depends_on": ["S1","S6"] },
-      { "action": "เทสต์ 99 ผ่าน ครอบคลุม polling, TH v3 query, fill truth, position reconciliation และ best-effort fallback", "owner": "code (PR นี้)", "start": "รอบนี้", "end": "เสร็จ", "depends_on": ["S1","S2","S3","S6"] },
-      { "action": "ตั้ง WEBULL_ENV=prod · เช็ค /health = trading_environment prod", "owner": "user", "start": "ถัดไป", "end": "TBD", "depends_on": ["S5"] },
-      { "action": "ปล่อย 1 tick => ยืนยันแถวเดียวกันเป็น ORDER_FILLED, position_reconciled=true และ market_state.quantity ขยับจริง (หรือ ORDER_NOT_FILLED พร้อมเหตุผล)", "owner": "user", "start": "ถัดไป", "end": "TBD", "depends_on": ["S5","S6"] }
+    "status": "in_progress",
+    "actions": [
+      {
+        "id": "A1",
+        "action": "สร้าง WebullApiGateway และ Manual API surface ครบ",
+        "status": "complete"
+      },
+      {
+        "id": "A2",
+        "action": "refactor WebullBroker ให้ใช้ gateway, validate authenticated account และ preview เสมอ",
+        "status": "complete"
+      },
+      {
+        "id": "A3",
+        "action": "สร้าง deterministic Firestore lifecycle, pending mirror, concurrency guard และ cross-invocation reconciliation",
+        "status": "complete"
+      },
+      {
+        "id": "A4",
+        "action": "สร้าง guarded PowerShell/Python live harness สำหรับ read-preview, MARKET place และ LIMIT cancel",
+        "status": "complete"
+      },
+      {
+        "id": "A5",
+        "action": "รัน offline test suite, compile, diff check และ artifact scan",
+        "status": "complete",
+        "evidence": {
+          "tests": "190 passed",
+          "compile": "passed",
+          "diff_check": "passed",
+          "sdk_log_or_token_artifacts": 0
+        }
+      },
+      {
+        "id": "A6",
+        "action": "รัน real-network UAT read-preview ผ่าน secure prompt",
+        "status": "blocked_waiting_for_secure_runtime_credential_input"
+      },
+      {
+        "id": "A7",
+        "action": "รัน armed UAT MARKET place และ LIMIT cancel roundtrip",
+        "status": "blocked_waiting_for_secure_runtime_credential_input_and_order_confirmation"
+      },
+      {
+        "id": "A8",
+        "action": "commit, push และ update Draft PR หลัง live gates ผ่าน",
+        "status": "pending",
+        "depends_on": ["A6", "A7"]
+      }
     ],
     "measurement": {
       "kpis": [
-        { "name": "fill_truth", "formula": "#(log ORDER_FILLED ที่ filled_quantity>0) / #(ORDER_FILLED)", "target": 1, "frequency": "ต่อวัน" },
-        { "name": "hidden_nonfill_rate", "formula": "#(ORDER_NOT_FILLED) / #(accepted orders)", "target": "มองเห็น (>0 ถ้าเศษหุ้นไม่ fill)", "frequency": "ต่อ tick" },
-        { "name": "position_move_consistency_prod", "formula": "|Δqty_actual - filled_quantity| <= epsilon", "target": 1, "frequency": "ต่อ order (prod)" }
+        {
+          "name": "manual_api_coverage",
+          "formula": "implemented_manual_operations / 10",
+          "target": 1.0
+        },
+        {
+          "name": "lifecycle_correlation",
+          "formula": "orders_updated_in_same_document / tracked_orders",
+          "target": 1.0
+        },
+        {
+          "name": "partial_fill_truth",
+          "formula": "active_partial_orders_not_marked_ORDER_FILLED / active_partial_orders",
+          "target": 1.0
+        },
+        {
+          "name": "secret_artifacts",
+          "formula": "credential_or_signed_request_artifacts",
+          "target": 0
+        },
+        {
+          "name": "live_uat_gate",
+          "formula": "passed_required_live_steps / required_live_steps",
+          "target": 1.0
+        }
       ],
-      "evaluation_equations": [
-        { "name": "fill_attainment", "formula": "F = filled_orders / intended_orders", "interpret": "F -> 1 คือ fill ครบตามเจตนา" },
-        { "name": "position_delta", "formula": "Δqty_actual = qty(n-1) - qty(n)", "interpret": "บน prod ควร ~ filled_quantity" }
-      ],
-      "loop": {
-        "control_equation": "e_n = order_qty - filled_quantity",
-        "convergence_rate": "r_n = |e_n| / |e_{n-1}|",
-        "stop_condition": "|e_n| <= epsilon",
-        "epsilon": 0.02,
+      "evaluation_loop": {
+        "control_error": "e_n = expected_filled_quantity - observed_position_delta",
+        "convergence_rate": "r_n = |e_n| / max(|e_(n-1)|, epsilon)",
+        "epsilon": 0.00001,
         "gain_K": 1.0,
-        "correction": "u_{n+1} = K * e_n",
-        "n_max": 5,
-        "escalation_ladder": [
-          { "if": "log = ORDER_FILLED และ qty ลดจริง", "loop_back_to": "stop", "action": "สำเร็จ" },
-          { "if": "log = ORDER_NOT_FILLED (เศษหุ้นไม่ fill)", "loop_back_to": "step_3", "action": "ตรวจว่าเป็น prod/uat, ลองปรับ session หรือทดสอบด้วยหุ้นเต็ม/notional เพื่อยืนยันกฎ fractional ของ Webull TH" },
-          { "if": "มี sandbox_note (is_production=false)", "loop_back_to": "step_4", "action": "ทำ S5: ตั้ง WEBULL_ENV=prod" },
-          { "if": "fill_verified=false บ่อย", "loop_back_to": "step_4", "action": "ตรวจสิทธิ์ get_order_detail / เครือข่าย" }
+        "correction": "u_(n+1) = observe exact order detail and positions again; never submit corrective order automatically",
+        "n_max_per_invocation": 3,
+        "cross_invocation_limit": "continue until terminal detail and a readable post-order position snapshot",
+        "stop_conditions": [
+          "ORDER_FILLED with position_after observed",
+          "ORDER_NOT_FILLED terminal with filled_quantity = 0",
+          "ORDER_PARTIAL_FILLED_TERMINAL with position_after observed",
+          "cancel confirmed by terminal detail and absent from open orders"
+        ],
+        "escalation": [
+          {
+            "condition": "detail/history ไม่พบ exact client_order_id หลัง ambiguous submit",
+            "loop_back_to": "step_3_diagnosis",
+            "action": "หยุด submission ใหม่และตรวจ request ID/permissions โดยไม่ resubmit"
+          },
+          {
+            "condition": "position delta ไม่ deterministic บน shared UAT",
+            "loop_back_to": "step_1_goals",
+            "action": "ใช้ dedicated UAT account; ห้ามอ้างผลว่าเป็น production"
+          },
+          {
+            "condition": "live read-preview หรือ mutation step ใด FAIL",
+            "loop_back_to": "step_3_diagnosis",
+            "action": "ใช้ failure_code แบบ sanitized แก้เฉพาะ root cause แล้วรัน gate ใหม่"
+          }
         ]
       }
+    },
+    "handoff_gate": {
+      "ready_to_commit": false,
+      "reason": "offline gates ผ่าน แต่ผู้ใช้กำหนดให้ real UAT API ผ่านก่อนส่งงาน; ยังไม่มี credential ใน process environment และจะไม่คัดลอกจาก chat ลง command",
+      "next_command": "powershell -ExecutionPolicy Bypass -File .\\scripts\\run_webull_live_test.ps1",
+      "secrets_in_file": false
     }
-  },
-  "assumptions": [
-    "live test จาก environment นี้ถูกบล็อกโดย egress policy (prod และ uat ตอบ 403) จึงใช้ screenshot log/Manual Test Lab เป็นข้อมูล และทดสอบตรรกะด้วย unit test",
-    "order_v3.get_order_detail รับ (account_id, client_order_id) และ SDK 2.0.12 ระบุว่ารองรับ Webull TH; v2 ระบุรองรับ HK/US เท่านั้น",
-    "สาเหตุที่เศษหุ้น 'รับแต่ไม่ fill' (เศษหุ้น vs UAT vs session) จะถูกแยกออกได้จาก log ORDER_NOT_FILLED + การรัน prod"
-  ]
+  }
 }
