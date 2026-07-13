@@ -1,73 +1,75 @@
 {
   "framework": "5-step-process",
   "language": "th",
-  "revision": "rev.3 (final) — ยืนยันแล้วว่า Webull รับออร์เดอร์เศษหุ้นได้ (UAT submit 0.05 → order_id); ต้นเหตุจริงคือรันบน UAT ที่รับออร์เดอร์แต่ไม่ fill กับตำแหน่งจริง + log ไม่ยืนยัน/ไม่ระบุ environment",
+  "revision": "rev.4 (final) — จาก log ล่าสุด: ออร์เดอร์เศษหุ้นของบอทถูก 'รับ' (order_id + ORDER_SUBMITTED) แต่ 'ไม่ถูก fill' ตำแหน่งจึงนิ่ง; ครั้งเดียวที่ตำแหน่งขยับคือ -1.0 หุ้นเต็ม (คำสั่งมือจาก Manual Test Lab) ไม่ใช่ออร์เดอร์บอท => ต้นเหตุ = บอทวางออร์เดอร์แบบ 'blind' ไม่เคยยืนยันการ fill เหมือนที่ Manual Test Lab ทำ (Order detail/Positions)",
   "step_1_goals": {
-    "raw_goal": "ทำไม SELL ออกแล้วจำนวนถือครองเท่าเดิม — แก้ไข final · รองรับเศษหุ้น",
-    "refined_goal": "ให้ log บอกความจริงทุกออร์เดอร์ (รับจริง/ถูกปฏิเสธ + environment) ไม่บล็อกเศษหุ้น และเมื่อรัน prod ให้ SELL/BUY กระทบจำนวนถือครองจริง",
-    "target_metric": { "name": "ออร์เดอร์เข้าตลาดจริง + log ตรงความจริง", "current": 0, "target": 1, "unit": "สัดส่วน", "horizon": "รอบ deploy ถัดไป" },
+    "raw_goal": "ส่ง order แล้วจำนวนถือครองไม่เปลี่ยน — แก้ไขตามแนวทาง API ของ Manual Test Lab",
+    "refined_goal": "หลัง place ทุกครั้ง ให้บอทยืนยันสถานะจริง (order detail) แล้ว log ตามความจริง: ORDER_FILLED เมื่อ fill จริง, ORDER_NOT_FILLED เมื่อรับแต่ไม่ fill, ORDER_SUBMITTED เฉพาะที่ยังค้าง — ไม่แปะ ORDER_SUBMITTED แบบตาบอดอีก",
+    "target_metric": { "name": "log สะท้อนการ fill จริง + มองเห็นออร์เดอร์ที่ 'รับแต่ไม่ fill'", "current": 0, "target": 1, "unit": "สัดส่วน", "horizon": "รอบ deploy ถัดไป" },
     "success_criteria": [
-      "เศษหุ้นไม่ถูกบล็อก (place response ที่มี order_id = accepted)",
-      "ORDER_SUBMITTED เฉพาะเมื่อมี order_id จริง ไม่งั้น ORDER_REJECTED + reason",
-      "ทุกออร์เดอร์ UAT มี sandbox_note บอกว่าตำแหน่งจริงไม่กระทบ",
-      "รัน prod แล้ว qty ที่ Webull รายงานเปลี่ยนจริงหลัง SELL/BUY"
+      "หลัง place บอทเรียก order_v2.get_order_detail (แบบเดียวกับ Manual Test Lab) เพื่ออ่าน status + filled_quantity",
+      "filled_quantity>0 => ORDER_FILLED; terminal+0 filled => ORDER_NOT_FILLED + เหตุผล; ยังค้าง => ORDER_SUBMITTED",
+      "การยืนยันเป็น best-effort: อ่านไม่ได้ก็ไม่ทำให้ tick ล้ม (fill_verified=false)",
+      "รัน prod แล้ว ORDER_FILLED ตรงกับ qty ที่ลดลงจริงในแถวถัดไป"
     ]
   },
-  "evidence_from_manual_test_lab": [
-    "Submit BUY AAPL quantity '0.05' (เศษหุ้น) → 'Webull accepted the order request' + order_id 037QS4S6QE8OO0KF4H6G000000 → เศษหุ้นรองรับจริง",
-    "Preview หุ้นเต็ม (1) ผ่าน; Positions อ่านได้ (AAPL 3.77304)",
-    "สรุป: กลไกส่งออร์เดอร์+เศษหุ้นครบ แต่ตำแหน่งไม่ขยับเพราะ UAT รับออร์เดอร์แต่ไม่ fill",
-    "live test จาก environment นี้ทำไม่ได้: egress policy บล็อกทั้ง prod และ uat (403)"
+  "evidence_from_latest_log": [
+    "3 SELL ของบอท (14:20–14:30, qty~0.10 ต่อไม้) => holding คงที่ 4.773",
+    "holding ขยับ 4.773 -> 3.773 (พอดี -1.0 หุ้นเต็ม) ช่วง 15:00–15:10 ที่ 'ไม่มีออร์เดอร์บอท' = คำสั่งมือ SELL 1 หุ้นจาก Manual Test Lab",
+    "ทุก BUY ของบอทหลังจากนั้น (qty~0.95) => holding แช่ 3.773",
+    "3 SELL ติดกันไม่ถูก has_open_order บล็อก => ออร์เดอร์ที่ 'รับ' ไม่ได้ค้างเป็น open (ถูก drop/expire) และไม่ fill",
+    "สรุป: หุ้นเต็ม fill ได้ / ออร์เดอร์เศษหุ้นของบอท 'รับแต่ไม่ fill' — บอทไม่เคยตรวจสอบจึง log ว่า ORDER_SUBMITTED หลอกตา"
   ],
+  "note_on_manual_test_lab": "Payload ของบอทกับ Manual Test Lab 'เหมือนกันทุกฟิลด์' (order_v3.place_order, entrust_type=QTY ฯลฯ) การจัด payload ให้ตรงจึงไม่เปลี่ยนอะไร — สิ่งที่ Manual Test Lab มีแต่บอทไม่มีคือ 'การยืนยัน' (ปุ่ม Order detail / Positions / History) หลักฐาน 0.05 ที่ 'accepted' คือแค่การรับ ไม่ใช่การ fill",
   "step_2_problems": [
-    { "id": "P1", "description": "qty คงที่ 4.77304 เป๊ะทั้ง 3 SELL — Webull รายงานตำแหน่งเดิม (ออร์เดอร์ไม่ fill, พฤติกรรม UAT)", "gap_value": 0.31, "severity": 5 },
-    { "id": "P2", "description": "log ORDER_SUBMITTED ไม่บอกว่าเป็น UAT และไม่ยืนยัน order_id → ดูเหมือนขายจริงแต่หุ้นไม่ลด", "gap_value": null, "severity": 5 },
-    { "id": "P3", "description": "ไม่รู้ว่า deploy อยู่ environment ไหน (default uat, ไม่มีคำเตือน)", "gap_value": null, "severity": 4 }
+    { "id": "P1", "description": "ออร์เดอร์เศษหุ้นของบอทถูกรับ (order_id) แต่ไม่ fill => ตำแหน่งไม่ขยับ", "gap_value": 0.31, "severity": 5 },
+    { "id": "P2", "description": "บอทวางออร์เดอร์แบบ blind: log ORDER_SUBMITTED โดยไม่เคยยืนยัน fill จริง => ดูเหมือนขายแต่หุ้นไม่ลด", "gap_value": null, "severity": 5 },
+    { "id": "P3", "description": "รันบน UAT อาจรับออร์เดอร์แต่ไม่ fill กับตำแหน่งจริง (ต้องแยกจาก P1 ด้วยการยืนยัน)", "gap_value": null, "severity": 4 }
   ],
   "step_3_diagnosis": [
     {
-      "problem_id": "P1",
+      "problem_id": "P2",
       "root_causes": [
-        { "id": "RC1", "cause": "รันบน UAT sandbox: รับออร์เดอร์แต่ไม่ fill กับตำแหน่งจริง", "why_chain": ["qty ไม่ขยับ","ออร์เดอร์ไม่ถูก fill","endpoint เป็น UAT (submit เศษหุ้น accepted แต่ตำแหน่งไม่เปลี่ยน)","config default WEBULL_ENV=uat"], "impact_weight": 0.60, "evidence": "UAT submit 0.05 accepted + order_id; qty สแตติก" }
+        { "id": "RC1", "cause": "บอทไม่ยืนยันการ fill หลัง place (ต่างจาก Manual Test Lab ที่มี Order detail/Positions)", "why_chain": ["place สำเร็จ (order_id)","สมมติว่า = ซื้อ/ขายสำเร็จ","log ORDER_SUBMITTED ทันที","ไม่เคยอ่าน filled_quantity","ออร์เดอร์ที่ไม่ fill จึงมองไม่เห็น"], "impact_weight": 0.65, "evidence": "log ORDER_SUBMITTED ทุกไม้ แต่ holding นิ่ง; หุ้นเต็ม (มือ) fill ได้" }
       ]
     },
     {
-      "problem_id": "P2",
+      "problem_id": "P1",
       "root_causes": [
-        { "id": "RC2", "cause": "log ไม่ยืนยัน order_id และไม่ระบุ environment", "why_chain": ["hardcoded ORDER_SUBMITTED","ไม่บอก UAT → อ่าน log ไม่รู้ว่าทำไมหุ้นไม่ลด"], "impact_weight": 0.40, "evidence": "main.py/broker.py เดิม" }
+        { "id": "RC2", "cause": "ออร์เดอร์เศษหุ้น/สภาพตลาดทำให้ 'รับแต่ไม่ fill' (หรือ UAT ไม่ fill)", "why_chain": ["qty ไม่ขยับ","ออร์เดอร์ไม่ถูก fill","เศษหุ้นถูก drop/expire หรือ endpoint = UAT"], "impact_weight": 0.35, "evidence": "-1.0 หุ้นเต็มเท่านั้นที่ fill; เศษหุ้นบอทไม่ fill" }
       ]
     }
   ],
   "removed_root_causes": [
-    { "id": "RC_frac", "cause": "เศษหุ้นถูกปฏิเสธ", "reason_removed": "พิสูจน์แล้วว่าเศษหุ้น 0.05 ถูกรับ (order_id) → โค้ดต้องไม่บล็อกเศษหุ้น" }
+    { "id": "RC_payload", "cause": "payload ต่างจาก Manual Test Lab", "reason_removed": "ตรวจแล้ว payload เหมือนกันทุกฟิลด์ (order_v3.place_order) — ไม่ใช่ต้นเหตุ" }
   ],
   "step_4_design": [
-    { "id": "S1", "targets_root_cause": "RC2", "intervention": "ยืนยันการรับจริง (order_id + สถานะไม่ reject) โดยใช้ response ของ place เป็นตัวตัดสิน ไม่บล็อกเศษหุ้น", "expected_effect": 0.6, "cost": 0.1, "priority_score": 6.0, "rank": 1 },
-    { "id": "S2", "targets_root_cause": "RC2", "intervention": "log ORDER_SUBMITTED เฉพาะเมื่อ accepted / ไม่งั้น ORDER_REJECTED + reason", "expected_effect": 0.5, "cost": 0.1, "priority_score": 5.0, "rank": 2 },
-    { "id": "S3", "targets_root_cause": "RC1/RC2", "intervention": "แนบ broker_environment/endpoint/is_production + sandbox_note ทุกออร์เดอร์ UAT", "expected_effect": 0.5, "cost": 0.1, "priority_score": 5.0, "rank": 3 },
-    { "id": "S4", "targets_root_cause": "RC1", "intervention": "/health เตือนเมื่อ trading_environment != prod", "expected_effect": 0.4, "cost": 0.1, "priority_score": 4.0, "rank": 4 },
-    { "id": "S5", "targets_root_cause": "RC2", "intervention": "คืน preview เป็น opt-in (default off) ไม่เสี่ยงบล็อกเศษหุ้นที่ place รับได้", "expected_effect": 0.3, "cost": 0.1, "priority_score": 3.0, "rank": 5 },
-    { "id": "S6", "targets_root_cause": "RC1", "intervention": "ตั้ง WEBULL_ENV=prod แล้ว deploy → SELL/BUY กระทบ qty จริง", "expected_effect": 0.9, "cost": 0.15, "priority_score": 6.0, "rank": 6 }
+    { "id": "S1", "targets_root_cause": "RC1", "intervention": "เพิ่ม broker.get_order_status() อ่าน order_v2.get_order_detail (API เดียวกับ Manual Test Lab) => status + filled_quantity", "expected_effect": 0.7, "cost": 0.1, "priority_score": 7.0, "rank": 1 },
+    { "id": "S2", "targets_root_cause": "RC1", "intervention": "หลัง place ที่ accepted ให้ยืนยัน fill แล้ว log ORDER_FILLED / ORDER_NOT_FILLED(+เหตุผล) / ORDER_SUBMITTED(ค้าง)", "expected_effect": 0.7, "cost": 0.1, "priority_score": 7.0, "rank": 2 },
+    { "id": "S3", "targets_root_cause": "RC1", "intervention": "ยืนยันเป็น best-effort (อ่านไม่ได้ => fill_verified=false, ไม่ล้ม tick, ไม่ roll back DNA step)", "expected_effect": 0.4, "cost": 0.05, "priority_score": 4.0, "rank": 3 },
+    { "id": "S4", "targets_root_cause": "RC2", "intervention": "แนบ filled_quantity/order_status + sandbox_note (UAT) + /health warning ให้แยกสาเหตุได้", "expected_effect": 0.5, "cost": 0.1, "priority_score": 5.0, "rank": 4 },
+    { "id": "S5", "targets_root_cause": "RC2", "intervention": "ตั้ง WEBULL_ENV=prod แล้ว deploy => ยืนยันว่า ORDER_FILLED ตรงกับ qty ที่ลดจริง", "expected_effect": 0.9, "cost": 0.15, "priority_score": 6.0, "rank": 5 }
   ],
   "step_5_do_it": {
     "action_plan": [
-      { "action": "broker/main/config: acceptance check (ไม่บล็อกเศษหุ้น) + honest log + env stamp + sandbox_note + health warning + preview opt-in", "owner": "code (PR นี้)", "start": "รอบนี้", "end": "เสร็จ", "depends_on": [] },
-      { "action": "เทสต์ 83 ผ่าน (fractional accepted ไม่ถูกบล็อก + sandbox_note + honest status)", "owner": "code (PR นี้)", "start": "รอบนี้", "end": "เสร็จ", "depends_on": ["S1","S2","S3","S4","S5"] },
-      { "action": "ตั้ง WEBULL_ENV=prod · เช็ค /health = trading_environment prod", "owner": "user", "start": "ถัดไป", "end": "TBD", "depends_on": ["S6"] },
-      { "action": "ปล่อย 1 tick SELL → ยืนยัน qty ลดจริงใน log แถวถัดไป", "owner": "user", "start": "ถัดไป", "end": "TBD", "depends_on": ["S6"] }
+      { "action": "broker.py: OrderStatus + get_order_status (order_v2.get_order_detail) + FILLED_QUANTITY_FIELDS/FILLED_ORDER_STATUSES", "owner": "code (PR นี้)", "start": "รอบนี้", "end": "เสร็จ", "depends_on": [] },
+      { "action": "main.py: _verify_fill + log ORDER_FILLED/ORDER_NOT_FILLED/ORDER_SUBMITTED + filled_quantity ในทั้ง log และ response", "owner": "code (PR นี้)", "start": "รอบนี้", "end": "เสร็จ", "depends_on": ["S1"] },
+      { "action": "เทสต์ 89 ผ่าน (filled=>ORDER_FILLED, accepted-unfilled=>ORDER_NOT_FILLED, verify fail=>fallback, broker parse filled_quantity)", "owner": "code (PR นี้)", "start": "รอบนี้", "end": "เสร็จ", "depends_on": ["S1","S2","S3"] },
+      { "action": "ตั้ง WEBULL_ENV=prod · เช็ค /health = trading_environment prod", "owner": "user", "start": "ถัดไป", "end": "TBD", "depends_on": ["S5"] },
+      { "action": "ปล่อย 1 tick => ยืนยันแถวถัดไปเป็น ORDER_FILLED และ qty ลดจริง (หรือ ORDER_NOT_FILLED พร้อมเหตุผลถ้าเศษหุ้นไม่ fill)", "owner": "user", "start": "ถัดไป", "end": "TBD", "depends_on": ["S5"] }
     ],
     "measurement": {
       "kpis": [
-        { "name": "order_accept_rate", "formula": "accepted_orders / intended_orders", "target": 1, "frequency": "ต่อ tick" },
-        { "name": "position_move_consistency_prod", "formula": "|Δqty_actual - order_qty| <= epsilon", "target": 1, "frequency": "ต่อ order (prod)" },
-        { "name": "log_truth", "formula": "#(ORDER_SUBMITTED with real order_id) / #(ORDER_SUBMITTED)", "target": 1, "frequency": "ต่อวัน" }
+        { "name": "fill_truth", "formula": "#(log ORDER_FILLED ที่ filled_quantity>0) / #(ORDER_FILLED)", "target": 1, "frequency": "ต่อวัน" },
+        { "name": "hidden_nonfill_rate", "formula": "#(ORDER_NOT_FILLED) / #(accepted orders)", "target": "มองเห็น (>0 ถ้าเศษหุ้นไม่ fill)", "frequency": "ต่อ tick" },
+        { "name": "position_move_consistency_prod", "formula": "|Δqty_actual - filled_quantity| <= epsilon", "target": 1, "frequency": "ต่อ order (prod)" }
       ],
       "evaluation_equations": [
-        { "name": "goal_attainment", "formula": "A = accepted_orders / intended_orders", "interpret": "A -> 1 คือรับจริงครบ" },
-        { "name": "position_delta", "formula": "Δqty_actual = qty(n-1) - qty(n)", "interpret": "บน prod ควรใกล้ order_qty" }
+        { "name": "fill_attainment", "formula": "F = filled_orders / intended_orders", "interpret": "F -> 1 คือ fill ครบตามเจตนา" },
+        { "name": "position_delta", "formula": "Δqty_actual = qty(n-1) - qty(n)", "interpret": "บน prod ควร ~ filled_quantity" }
       ],
       "loop": {
-        "control_equation": "e_n = order_qty - Δqty_actual",
+        "control_equation": "e_n = order_qty - filled_quantity",
         "convergence_rate": "r_n = |e_n| / |e_{n-1}|",
         "stop_condition": "|e_n| <= epsilon",
         "epsilon": 0.02,
@@ -75,17 +77,17 @@
         "correction": "u_{n+1} = K * e_n",
         "n_max": 5,
         "escalation_ladder": [
-          { "if": "มี sandbox_note (is_production=false)", "loop_back_to": "step_4", "action": "ทำ S6: ตั้ง WEBULL_ENV=prod" },
-          { "if": "prod + ORDER_SUBMITTED + qty ลดจริง", "loop_back_to": "stop", "action": "สำเร็จ" },
-          { "if": "ORDER_REJECTED + reason", "loop_back_to": "step_2", "action": "อ่าน reason แล้วแก้" },
-          { "if": "prod แต่ qty ไม่ขยับ", "loop_back_to": "step_3", "action": "ตรวจ has_open_order + order detail (order ค้าง/ไม่ fill)" }
+          { "if": "log = ORDER_FILLED และ qty ลดจริง", "loop_back_to": "stop", "action": "สำเร็จ" },
+          { "if": "log = ORDER_NOT_FILLED (เศษหุ้นไม่ fill)", "loop_back_to": "step_3", "action": "ตรวจว่าเป็น prod/uat, ลองปรับ session หรือทดสอบด้วยหุ้นเต็ม/notional เพื่อยืนยันกฎ fractional ของ Webull TH" },
+          { "if": "มี sandbox_note (is_production=false)", "loop_back_to": "step_4", "action": "ทำ S5: ตั้ง WEBULL_ENV=prod" },
+          { "if": "fill_verified=false บ่อย", "loop_back_to": "step_4", "action": "ตรวจสิทธิ์ get_order_detail / เครือข่าย" }
         ]
       }
     }
   },
   "assumptions": [
-    "live test จาก environment นี้ถูกบล็อกโดย egress policy (prod และ uat ตอบ 403) จึงใช้ screenshot Manual Test Lab เป็นข้อมูลทดสอบ",
-    "UAT รับออร์เดอร์แต่ไม่ fill กับตำแหน่งจริง (อนุมานจากพฤติกรรมที่สังเกต) — ยืนยันขั้นสุดท้ายด้วยการรัน prod",
-    "ยังไม่ทราบค่า WEBULL_ENV จริงของ deployment ที่สร้าง log เดิม — RC1 ต้องให้ผู้ใช้ยืนยัน"
+    "live test จาก environment นี้ถูกบล็อกโดย egress policy (prod และ uat ตอบ 403) จึงใช้ screenshot log/Manual Test Lab เป็นข้อมูล และทดสอบตรรกะด้วย unit test",
+    "order_v2.get_order_detail รับ (account_id, client_order_id) เหมือนที่ Manual Test Lab ใช้",
+    "สาเหตุที่เศษหุ้น 'รับแต่ไม่ fill' (เศษหุ้น vs UAT vs session) จะถูกแยกออกได้จาก log ORDER_NOT_FILLED + การรัน prod"
   ]
 }

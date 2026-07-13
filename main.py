@@ -197,6 +197,23 @@ def _decision_payload(decision: RebalanceDecision) -> dict[str, Any]:
     return decision.to_dict()
 
 
+def _verify_fill(broker, client_order_id: str):
+    """Best-effort read of an order's real fill state; never raises.
+
+    Verification is diagnostic, not part of placing the order, so a failure to
+    read the order back must not fail the tick or roll back the reserved DNA
+    step. Returns an ``OrderStatus`` on success, or ``None`` when the read
+    could not be completed.
+    """
+    try:
+        return broker.get_order_status(client_order_id)
+    except BrokerError:
+        logger.warning(
+            "Could not verify fill for order %s", client_order_id, exc_info=True
+        )
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Signal execution
 # ---------------------------------------------------------------------------
@@ -290,20 +307,57 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
     order_accepted = getattr(
         order_result, "accepted", order_result.order_id is not None
     )
-    log_status = "ORDER_SUBMITTED" if order_accepted else "ORDER_REJECTED"
 
     order_log = {
         **trade_log_base,
-        "status": log_status,
         "client_order_id": client_order_id,
         "order_result": order_result.to_dict(),
     }
 
-    # The exact symptom in the report: an order is accepted (real order id) yet
-    # the held quantity never moves. On UAT that is expected — the sandbox
-    # accepts the order but does not fill it against a real position. Spell that
-    # out on every accepted-but-non-production order so the log is unambiguous.
-    if order_accepted and not broker_config.is_production:
+    if not order_accepted:
+        order_log["status"] = "ORDER_REJECTED"
+        _log_trade(config, order_log)
+        return _ok(
+            "ORDER_REJECTED",
+            dna_step=dna_step,
+            dna_signal=current_signal,
+            decision=decision_data,
+            order=order_result.to_dict(),
+        )
+
+    # Accepted is NOT the same as filled. This is the crux of the reported bug:
+    # a (fractional) order is accepted with a real id, logged as submitted, then
+    # cancelled/expired unfilled — so the held quantity never moves. Verify the
+    # real fill with the same order-detail read the Manual Test Lab exposes, and
+    # log ORDER_FILLED / ORDER_NOT_FILLED accordingly instead of a blind
+    # ORDER_SUBMITTED. Verification is diagnostic only — a failure to read it
+    # back must never fail the tick or roll back the DNA step.
+    fill = _verify_fill(broker, client_order_id)
+    if fill is None:
+        log_status = "ORDER_SUBMITTED"
+        order_log["fill_verified"] = False
+    else:
+        order_log["order_status"] = fill.to_dict()
+        order_log["filled_quantity"] = fill.filled_quantity
+        if fill.is_filled:
+            log_status = "ORDER_FILLED"
+        elif fill.is_terminal_unfilled:
+            log_status = "ORDER_NOT_FILLED"
+            order_log["not_filled_reason"] = (
+                f"Webull accepted the order but it reached status "
+                f"{fill.status!r} with 0 filled — the held quantity did not move"
+            )
+        else:
+            # Accepted and resting (working / pending), not yet executed.
+            log_status = "ORDER_SUBMITTED"
+
+    order_log["status"] = log_status
+
+    # A UAT sandbox accepts orders but never fills against a real position, so
+    # an accepted (or even "filled") order there still leaves the real holding
+    # untouched. Spell that out on every non-production order so the log is
+    # unambiguous about why the quantity may not move.
+    if not broker_config.is_production:
         order_log["sandbox_note"] = (
             "UAT sandbox: order accepted but the real position is not affected; "
             "set WEBULL_ENV=prod to trade a real position"
@@ -311,16 +365,20 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
 
     _log_trade(config, order_log)
 
+    # A definitive non-fill surfaces in the HTTP status too; a fill or a
+    # still-working order is reported as OK.
+    body_status = "OK" if log_status != "ORDER_NOT_FILLED" else "ORDER_NOT_FILLED"
     return _ok(
-        "OK" if order_accepted else "ORDER_REJECTED",
+        body_status,
         dna_step=dna_step,
         dna_signal=current_signal,
         decision=decision_data,
         order=order_result.to_dict(),
-        **(
-            {"sandbox_note": order_log["sandbox_note"]}
-            if "sandbox_note" in order_log else {}
-        ),
+        order_log_status=log_status,
+        **({"filled_quantity": order_log["filled_quantity"]}
+           if "filled_quantity" in order_log else {}),
+        **({"sandbox_note": order_log["sandbox_note"]}
+           if "sandbox_note" in order_log else {}),
     )
 
 

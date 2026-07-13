@@ -65,6 +65,21 @@ PREVIEW_ESTIMATE_FIELDS = (
     "estimated_transaction_fee", "estimatedTransactionFee",
     "estimated_quantity", "estimatedQuantity", "buying_power", "buyingPower",
 )
+# The quantity Webull reports as actually executed on an order. Reading this
+# back (via the Manual Test Lab's "Order detail" endpoint) is the only way to
+# know an accepted order truly moved the position — a fractional order can be
+# accepted with an id, then cancelled/expired unfilled, leaving the held
+# quantity exactly where it was. That is the reported bug.
+FILLED_QUANTITY_FIELDS = (
+    "filled_quantity", "filledQuantity", "filled_qty", "filledQty",
+    "cumulative_quantity", "cumulativeQuantity",
+    "cumulative_filled_quantity", "cumulativeFilledQuantity",
+    "executed_quantity", "executedQuantity", "filled",
+)
+# Terminal states in which the order has (at least partially) executed.
+FILLED_ORDER_STATUSES = frozenset({
+    "FILLED", "PARTIALLY_FILLED", "PARTIAL_FILLED", "PARTIALLYFILLED",
+})
 
 # ---------------------------------------------------------------------------
 # Exceptions
@@ -125,6 +140,50 @@ class OrderResult:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class OrderStatus:
+    """Verified state of a placed order, read back from Webull.
+
+    ``place_market_order`` only proves Webull *accepted* the request (it
+    returned an order id). Whether that order actually *filled* — moved the
+    held quantity — is a separate fact only the order-detail endpoint can
+    confirm. Reading it back is exactly what the Manual Test Lab does with its
+    "Order detail" button, and it is what turns an invisible "accepted but
+    never filled" order (the reported bug: a SELL logged while the held
+    quantity never moves) into an explicit, logged outcome.
+    """
+
+    client_order_id: str
+    status: str
+    filled_quantity: float
+    raw_response: Any
+
+    @property
+    def is_filled(self) -> bool:
+        """Whether any quantity actually executed."""
+        if self.filled_quantity > 0:
+            return True
+        return self.status.strip().upper() in FILLED_ORDER_STATUSES
+
+    @property
+    def is_terminal_unfilled(self) -> bool:
+        """Whether the order reached a dead end without executing anything."""
+        return (
+            self.filled_quantity <= 0
+            and self.status.strip().upper() in REJECTED_ORDER_STATUSES
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "client_order_id": self.client_order_id,
+            "status": self.status,
+            "filled_quantity": self.filled_quantity,
+            "is_filled": self.is_filled,
+            "is_terminal_unfilled": self.is_terminal_unfilled,
+            "raw_response": self.raw_response,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -565,6 +624,37 @@ class WebullBroker:
             _normalize_symbol(_get_value(item, *SYMBOL_FIELDS, default=""))
             == normalized
             for item in _iter_dicts(response)
+        )
+
+    @_retry()
+    def get_order_status(self, client_order_id: str) -> OrderStatus:
+        """Read an order's real status and filled quantity from Webull.
+
+        Uses the same order-detail read the Manual Test Lab exposes
+        (``order_v2.get_order_detail``) — an idempotent read, so it is safe to
+        retry transient 417/5xx/network errors. This is the verification the
+        bot previously skipped: it distinguishes an order Webull merely
+        ACCEPTED (returned an id) from one it actually FILLED, closing the gap
+        that let a SELL log as submitted while the held quantity never moved.
+        """
+        response = _response_json_or_raise(
+            _call_sdk(
+                self.trade_client.order_v2.get_order_detail,
+                self.account_id,
+                client_order_id,
+            )
+        )
+        status = _find_first_value(response, *ORDER_STATUS_FIELDS, default="UNKNOWN")
+        raw_filled = _find_first_value(response, *FILLED_QUANTITY_FIELDS, default=None)
+        filled_quantity = (
+            _coerce_number(raw_filled, "filled quantity")
+            if raw_filled not in (None, "") else 0.0
+        )
+        return OrderStatus(
+            client_order_id=client_order_id,
+            status=str(status),
+            filled_quantity=filled_quantity,
+            raw_response=response,
         )
 
     def place_market_order(
