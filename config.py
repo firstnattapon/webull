@@ -327,11 +327,13 @@ def _build_broker_config(project_id: str | None = None) -> BrokerConfig:
             "WEBULL_SUPPORT_TRADING_SESSION",
             "CORE",
         ).strip().upper(),
-        # Preview-then-place by default (the Manual Test Lab flow): the preview
-        # catches an order Webull would reject — e.g. a fractional quantity or a
-        # closed market — before a phantom "submitted" is logged. Set
-        # WEBULL_PREVIEW_ORDERS=false to place without previewing.
-        preview_orders=_get_bool("WEBULL_PREVIEW_ORDERS", default=True),
+        # Place directly by default. Fractional market orders are accepted by
+        # Webull (verified in UAT: a 0.05-share order returns a real order id),
+        # so the place response itself is the reliable acceptance signal — the
+        # bot must never gate a valid fractional order behind a stricter preview.
+        # Preview-gating stays available for the cautious (WEBULL_PREVIEW_ORDERS
+        # =true): when on, an order the preview flags as an error is not placed.
+        preview_orders=_get_bool("WEBULL_PREVIEW_ORDERS", default=False),
     )
 
 

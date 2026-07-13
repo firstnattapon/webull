@@ -140,18 +140,35 @@ def _health_response():
     except Exception as exc:
         checks["dna"] = f"error: {exc}"
 
+    # Surface the resolved trading environment without touching credentials, so
+    # a UAT deployment (which accepts orders but never moves a real position) is
+    # obvious at a glance rather than a surprise in the trade log.
+    try:
+        broker_config = load_broker_config(load_app_config().project_id)
+        trading_environment = broker_config.environment_label
+        is_production = broker_config.is_production
+    except Exception:
+        trading_environment = "unknown"
+        is_production = False
+
     healthy = all(value.startswith("ok") for value in checks.values())
     body = {
         "status": "HEALTHY" if healthy else "UNHEALTHY",
         "version": BOT_VERSION,
         "uptime_seconds": round(time.time() - _started_at, 1),
         "market_open": is_us_market_open(),
+        "trading_environment": trading_environment,
         "checks": checks,
         "metrics": {
             "handler": get_handler_metrics(),
             "broker": get_broker_metrics(),
         },
     }
+    if not is_production:
+        body["warning"] = (
+            f"trading_environment={trading_environment}: orders are accepted but "
+            "do not affect a real position; set WEBULL_ENV=prod to trade for real"
+        )
     return jsonify(body), (200 if healthy else 503)
 
 
@@ -275,12 +292,24 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
     )
     log_status = "ORDER_SUBMITTED" if order_accepted else "ORDER_REJECTED"
 
-    _log_trade(config, {
+    order_log = {
         **trade_log_base,
         "status": log_status,
         "client_order_id": client_order_id,
         "order_result": order_result.to_dict(),
-    })
+    }
+
+    # The exact symptom in the report: an order is accepted (real order id) yet
+    # the held quantity never moves. On UAT that is expected — the sandbox
+    # accepts the order but does not fill it against a real position. Spell that
+    # out on every accepted-but-non-production order so the log is unambiguous.
+    if order_accepted and not broker_config.is_production:
+        order_log["sandbox_note"] = (
+            "UAT sandbox: order accepted but the real position is not affected; "
+            "set WEBULL_ENV=prod to trade a real position"
+        )
+
+    _log_trade(config, order_log)
 
     return _ok(
         "OK" if order_accepted else "ORDER_REJECTED",
@@ -288,6 +317,10 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
         dna_signal=current_signal,
         decision=decision_data,
         order=order_result.to_dict(),
+        **(
+            {"sandbox_note": order_log["sandbox_note"]}
+            if "sandbox_note" in order_log else {}
+        ),
     )
 
 
