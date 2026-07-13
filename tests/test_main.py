@@ -103,7 +103,11 @@ def test_threshold_response_and_log_payload_are_preserved(app, app_config):
     body, code, _ = invoke(
         app,
         load_app_config=Mock(return_value=app_config),
-        load_broker_config=Mock(return_value=SimpleNamespace()),
+        load_broker_config=Mock(return_value=SimpleNamespace(
+            environment_label="prod",
+            endpoint="api.webull.co.th",
+            is_production=True,
+        )),
         get_broker=Mock(return_value=broker_instance),
         _log_trade=log_trade,
     )
@@ -138,7 +142,11 @@ def test_order_response_and_deterministic_client_id_are_preserved(app, app_confi
     body, code, _ = invoke(
         app,
         load_app_config=Mock(return_value=app_config),
-        load_broker_config=Mock(return_value=SimpleNamespace()),
+        load_broker_config=Mock(return_value=SimpleNamespace(
+            environment_label="prod",
+            endpoint="api.webull.co.th",
+            is_production=True,
+        )),
         get_broker=Mock(return_value=broker_instance),
         _log_trade=log_trade,
     )
@@ -159,6 +167,109 @@ def test_order_response_and_deterministic_client_id_are_preserved(app, app_confi
     assert len(kwargs["client_order_id"]) == 32
 
 
+def test_unaccepted_order_is_logged_as_rejected_not_submitted(app, app_config):
+    """Webull answered 200 but never booked the order: the log must say so.
+
+    This is the reported bug — a SELL that shows in the log while the held
+    quantity never moves. The handler must not paint it as ORDER_SUBMITTED.
+    """
+    broker_instance = Mock()
+    broker_instance.get_position_and_price.return_value = MarketState(5.0, 100.0)
+    broker_instance.has_open_order.return_value = False
+    broker_instance.place_market_order.return_value = OrderResult(
+        client_order_id="id",
+        order_id=None,
+        status="UNKNOWN",
+        preview=None,
+        raw_response={"msg": "rejected"},
+        accepted=False,
+        reason="rejected",
+    )
+    log_trade = Mock()
+
+    body, code, _ = invoke(
+        app,
+        load_app_config=Mock(return_value=app_config),
+        load_broker_config=Mock(return_value=SimpleNamespace(
+            environment_label="prod",
+            endpoint="api.webull.co.th",
+            is_production=True,
+        )),
+        get_broker=Mock(return_value=broker_instance),
+        _log_trade=log_trade,
+    )
+
+    assert code == 200
+    assert body["status"] == "ORDER_REJECTED"
+    payload = log_trade.call_args.args[1]
+    assert payload["status"] == "ORDER_REJECTED"
+    assert payload["order_result"]["reason"] == "rejected"
+
+
+def test_order_log_records_broker_environment(app, app_config):
+    """A UAT sandbox no-op must be identifiable in the trade log."""
+    broker_instance = Mock()
+    broker_instance.get_position_and_price.return_value = MarketState(5.0, 100.0)
+    broker_instance.has_open_order.return_value = False
+    broker_instance.place_market_order.return_value = OrderResult(
+        client_order_id="id",
+        order_id="order-1",
+        status="SUBMITTED",
+        preview=None,
+        raw_response={"order_id": "order-1"},
+    )
+    log_trade = Mock()
+
+    invoke(
+        app,
+        load_app_config=Mock(return_value=app_config),
+        load_broker_config=Mock(return_value=SimpleNamespace(
+            environment_label="uat",
+            endpoint="th-api.uat.webullbroker.com",
+            is_production=False,
+        )),
+        get_broker=Mock(return_value=broker_instance),
+        _log_trade=log_trade,
+    )
+
+    payload = log_trade.call_args.args[1]
+    assert payload["broker_environment"] == "uat"
+    assert payload["is_production"] is False
+    # The accepted-but-unchanged-position symptom must be spelled out on UAT.
+    assert "sandbox_note" in payload
+    assert "position is not affected" in payload["sandbox_note"]
+
+
+def test_production_order_has_no_sandbox_note(app, app_config):
+    """A production order must not carry the UAT sandbox note."""
+    broker_instance = Mock()
+    broker_instance.get_position_and_price.return_value = MarketState(5.0, 100.0)
+    broker_instance.has_open_order.return_value = False
+    broker_instance.place_market_order.return_value = OrderResult(
+        client_order_id="id",
+        order_id="order-1",
+        status="SUBMITTED",
+        preview=None,
+        raw_response={"order_id": "order-1"},
+    )
+    log_trade = Mock()
+
+    body, _, _ = invoke(
+        app,
+        load_app_config=Mock(return_value=app_config),
+        load_broker_config=Mock(return_value=SimpleNamespace(
+            environment_label="prod",
+            endpoint="api.webull.co.th",
+            is_production=True,
+        )),
+        get_broker=Mock(return_value=broker_instance),
+        _log_trade=log_trade,
+    )
+
+    assert "sandbox_note" not in log_trade.call_args.args[1]
+    assert "sandbox_note" not in body
+
+
 def test_open_order_prevents_duplicate_rebalance_submission(app, app_config):
     broker_instance = Mock()
     broker_instance.get_position_and_price.return_value = MarketState(5.0, 100.0)
@@ -168,7 +279,11 @@ def test_open_order_prevents_duplicate_rebalance_submission(app, app_config):
     body, code, _ = invoke(
         app,
         load_app_config=Mock(return_value=app_config),
-        load_broker_config=Mock(return_value=SimpleNamespace()),
+        load_broker_config=Mock(return_value=SimpleNamespace(
+            environment_label="prod",
+            endpoint="api.webull.co.th",
+            is_production=True,
+        )),
         get_broker=Mock(return_value=broker_instance),
         _log_trade=log_trade,
     )
@@ -190,7 +305,11 @@ def test_broker_error_response_shape_is_preserved(app, app_config):
     body, code, _ = invoke(
         app,
         load_app_config=Mock(return_value=app_config),
-        load_broker_config=Mock(return_value=SimpleNamespace()),
+        load_broker_config=Mock(return_value=SimpleNamespace(
+            environment_label="prod",
+            endpoint="api.webull.co.th",
+            is_production=True,
+        )),
         get_broker=Mock(return_value=broker_instance),
         _try_log_error=Mock(),
     )

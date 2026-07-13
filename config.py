@@ -63,6 +63,22 @@ class BrokerConfig:
     support_trading_session: str
     preview_orders: bool
 
+    @property
+    def is_production(self) -> bool:
+        """Whether orders are routed to the live production endpoint.
+
+        The bot defaults ``WEBULL_ENV`` to ``uat``, whose sandbox accepts
+        orders (returning an id) but never mutates the real position — a SELL
+        then shows in the trade log while the held quantity stays put. Surfacing
+        this on every order log makes a sandbox no-op impossible to mistake for
+        a real fill.
+        """
+        return self.endpoint == WEBULL_TRADING_ENDPOINTS["prod"]
+
+    @property
+    def environment_label(self) -> str:
+        return "prod" if self.is_production else "uat"
+
     def safe_dict(self) -> dict[str, Any]:
         """Loggable view with credentials redacted."""
         return {
@@ -311,6 +327,12 @@ def _build_broker_config(project_id: str | None = None) -> BrokerConfig:
             "WEBULL_SUPPORT_TRADING_SESSION",
             "CORE",
         ).strip().upper(),
+        # Place directly by default. Fractional market orders are accepted by
+        # Webull (verified in UAT: a 0.05-share order returns a real order id),
+        # so the place response itself is the reliable acceptance signal — the
+        # bot must never gate a valid fractional order behind a stricter preview.
+        # Preview-gating stays available for the cautious (WEBULL_PREVIEW_ORDERS
+        # =true): when on, an order the preview flags as an error is not placed.
         preview_orders=_get_bool("WEBULL_PREVIEW_ORDERS", default=False),
     )
 
