@@ -220,6 +220,12 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
         "market_state": market_state.to_dict(),
         "decision": decision_data,
         "baseline_pnl": decision.baseline_pnl,
+        # Record which environment the order is routed to. A UAT sandbox
+        # accepts orders but never moves the real position, so without this
+        # a sell logged here looks identical to a real fill that did nothing.
+        "broker_environment": broker_config.environment_label,
+        "broker_endpoint": broker_config.endpoint,
+        "is_production": broker_config.is_production,
     }
 
     if decision.action == "PASS":
@@ -261,15 +267,23 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
         client_order_id=client_order_id,
     )
 
+    # Log the real outcome. Webull can answer HTTP 200 without booking the
+    # order (rejects, or a UAT sandbox echo); marking those ORDER_SUBMITTED is
+    # what made a sell appear in the log while the held quantity never changed.
+    order_accepted = getattr(
+        order_result, "accepted", order_result.order_id is not None
+    )
+    log_status = "ORDER_SUBMITTED" if order_accepted else "ORDER_REJECTED"
+
     _log_trade(config, {
         **trade_log_base,
-        "status": "ORDER_SUBMITTED",
+        "status": log_status,
         "client_order_id": client_order_id,
         "order_result": order_result.to_dict(),
     })
 
     return _ok(
-        "OK",
+        "OK" if order_accepted else "ORDER_REJECTED",
         dna_step=dna_step,
         dna_signal=current_signal,
         decision=decision_data,

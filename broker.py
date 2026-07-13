@@ -41,6 +41,22 @@ LAST_PRICE_FIELDS = (
     "last_price", "lastPrice", "last", "price", "close",
     "close_price", "closePrice", "pPrice",
 )
+ORDER_ID_FIELDS = ("order_id", "orderId", "id")
+ORDER_STATUS_FIELDS = ("status", "order_status", "orderStatus")
+# Webull can answer a place request with HTTP 200 while the body reports the
+# order was not actually accepted (fractional/quantity rejects, risk checks,
+# a UAT sandbox that echoes the request without booking it). These states mean
+# "no live order exists" even though no exception was raised.
+REJECTED_ORDER_STATUSES = frozenset({
+    "FAILED", "FAIL", "REJECTED", "REJECT", "CANCELLED", "CANCELED",
+    "DENIED", "INVALID", "ERROR", "EXPIRED",
+})
+# Fields Webull uses to explain why a request did not succeed.
+ORDER_REASON_FIELDS = (
+    "msg", "message", "error", "error_msg", "errorMsg", "description",
+    "desc", "reason", "failure_reason", "failureReason", "code",
+    "error_code", "errorCode", "failure_code", "failureCode",
+)
 
 # ---------------------------------------------------------------------------
 # Exceptions
@@ -90,6 +106,14 @@ class OrderResult:
     status: str
     preview: Any
     raw_response: Any
+    # ``accepted`` is the single source of truth for "did Webull really take
+    # this order". It is True only when the response carries an order id and
+    # the reported status is not a terminal rejection. When False the order
+    # never reached the live book, so the caller must NOT log it as submitted
+    # (that mismatch is exactly why a SELL could show in the log while the
+    # held quantity never moved). ``reason`` captures Webull's own message.
+    accepted: bool = True
+    reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -541,18 +565,38 @@ class WebullBroker:
         response = _response_json_or_raise(
             _call_sdk(order_api.place_order, self.account_id, order_payload)
         )
-        _record_metric("orders_placed")
 
-        order_id = _find_first_value(response, "order_id", "orderId", "id")
+        order_id = _find_first_value(response, *ORDER_ID_FIELDS)
+        status = _find_first_value(
+            response, *ORDER_STATUS_FIELDS,
+            default="SUBMITTED" if order_id else "UNKNOWN",
+        )
+        accepted = order_id is not None and str(status).strip().upper() not in (
+            REJECTED_ORDER_STATUSES
+        )
+        # Only a genuinely accepted order counts toward the placed metric —
+        # otherwise the counter would imply trades that never hit the book.
+        if accepted:
+            _record_metric("orders_placed")
+        else:
+            _record_metric("errors")
+            logger.warning(
+                "Order not accepted by Webull: side=%s qty=%s symbol=%s "
+                "coid=%s status=%s response=%r",
+                side, quantity, symbol, client_order_id, status, response,
+            )
+
         return OrderResult(
             client_order_id=client_order_id,
             order_id=order_id,
-            status=_find_first_value(
-                response, "status", "order_status", "orderStatus",
-                default="SUBMITTED" if order_id else "UNKNOWN",
-            ),
+            status=str(status),
             preview=preview_response,
             raw_response=response,
+            accepted=accepted,
+            reason=None if accepted else _find_first_value(
+                response, *ORDER_REASON_FIELDS,
+                default="Webull returned no order id",
+            ),
         )
 
     # ---- private: data fetching -------------------------------------------
