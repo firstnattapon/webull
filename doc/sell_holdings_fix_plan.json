@@ -264,7 +264,7 @@
     ]
   },
   "step_5_do_it": {
-    "status": "in_progress",
+    "status": "complete",
     "actions": [
       {
         "id": "A1",
@@ -330,8 +330,13 @@
       {
         "id": "A8",
         "action": "commit, push และ update Draft PR หลัง live gates ผ่าน",
-        "status": "ready_to_commit_and_push",
-        "depends_on": ["A6", "A7"]
+        "status": "complete",
+        "depends_on": ["A6", "A7"],
+        "evidence": {
+          "implementation_commit": "5b1bf72",
+          "branch_pushed": true,
+          "draft_pr": 14
+        }
       }
     ],
     "measurement": {
@@ -399,7 +404,9 @@
       "ready_to_commit": true,
       "reason": "offline regression ผ่าน 276 tests และ real UAT ผ่าน read-preview, MARKET full-fill/history/position reconciliation และ LIMIT place/open/cancel/terminal/absence ครบ โดยไม่มี credential ใน source, command, planner หรือ log",
       "next_command": "powershell -ExecutionPolicy Bypass -File .\\scripts\\run_webull_live_test.ps1",
-      "secrets_in_file": false
+      "secrets_in_file": false,
+      "committed_and_pushed": true,
+      "draft_pr_url": "https://github.com/firstnattapon/webull/pull/14"
     }
   }
 }
