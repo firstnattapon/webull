@@ -48,6 +48,7 @@ MUTATING_MODES = frozenset({MARKET_PLACE_MODE, LIMIT_CANCEL_MODE})
 MUTATION_ARMING_PHRASE = "I_UNDERSTAND_THIS_MUTATES_WEBULL_UAT"
 ORDER_QUERY_PAGE_SIZE = 100
 ORDER_QUERY_MAX_PAGES = 50
+OFFICIAL_TRADING_SESSIONS = frozenset({"CORE", "ALL", "NIGHT", "ALL_DAY"})
 
 ACCOUNT_ID_FIELDS = ("account_id",)
 SYMBOL_FIELDS = ("symbol",)
@@ -58,7 +59,7 @@ FILLED_QUANTITY_FIELDS = ("filled_quantity",)
 PREVIEW_COST_FIELD = "estimated_cost"
 PREVIEW_FEE_FIELD = "estimated_transaction_fee"
 REJECTED_STATUSES = frozenset({"FAILED"})
-CANCELLED_STATUSES = frozenset({"CANCELLED"})
+CANCELLED_STATUSES = frozenset({"CANCELLED", "CANCELED"})
 FILLED_STATUSES = frozenset({"FILLED"})
 TERMINAL_STATUSES = REJECTED_STATUSES | FILLED_STATUSES | CANCELLED_STATUSES
 
@@ -73,6 +74,27 @@ class HarnessFailure(RuntimeError):
     def __init__(self, code: str):
         self.code = code
         super().__init__(code)
+
+
+def _safe_gateway_error_metadata(exc: Exception) -> dict[str, Any]:
+    """Expose only bounded status/code diagnostics, never exception text."""
+
+    metadata: dict[str, Any] = {
+        "failure_code": "gateway_call_failed",
+        "error_type": type(exc).__name__,
+    }
+    status_code = getattr(exc, "status_code", None)
+    if not isinstance(status_code, bool):
+        try:
+            normalized_status = int(status_code)
+        except (TypeError, ValueError):
+            normalized_status = None
+        if normalized_status is not None and 100 <= normalized_status <= 599:
+            metadata["http_status"] = normalized_status
+    error_code = getattr(exc, "error_code", None)
+    if isinstance(error_code, str) and _STATUS_PATTERN.fullmatch(error_code):
+        metadata["upstream_error_code"] = error_code
+    return metadata
 
 
 @dataclass(frozen=True)
@@ -216,8 +238,8 @@ def load_harness_config(mode: str) -> HarnessConfig:
         raise HarnessFailure("invalid_webull_test_symbol")
     if side not in {"BUY", "SELL"}:
         raise HarnessFailure("invalid_webull_test_side")
-    if session != "CORE":
-        raise HarnessFailure("webull_test_session_must_be_core")
+    if session not in OFFICIAL_TRADING_SESSIONS:
+        raise HarnessFailure("invalid_webull_test_session")
 
     quantity = _parse_decimal("WEBULL_TEST_QUANTITY", quantity_raw.strip())
     if quantity.as_tuple().exponent < -5:
@@ -267,12 +289,21 @@ def load_harness_config(mode: str) -> HarnessConfig:
         and not _CLIENT_ORDER_ID_PATTERN.fullmatch(detail_client_order_id)
     ):
         raise HarnessFailure("invalid_webull_test_client_order_id")
+    # UAT cancel acknowledgements can precede the terminal detail update by
+    # close to a minute. Keep MARKET/read checks short, but give the explicit
+    # limit-cancel roundtrip a bounded propagation window without retrying
+    # cancel itself.
+    default_poll_attempts = 20 if mode == LIMIT_CANCEL_MODE else 6
+    default_poll_interval = 3.0 if mode == LIMIT_CANCEL_MODE else 2.0
     poll_attempts = _parse_bounded_int(
-        "WEBULL_TEST_POLL_ATTEMPTS", default=6, minimum=1, maximum=20
+        "WEBULL_TEST_POLL_ATTEMPTS",
+        default=default_poll_attempts,
+        minimum=1,
+        maximum=20,
     )
     poll_interval = _parse_bounded_float(
         "WEBULL_TEST_POLL_INTERVAL_SECONDS",
-        default=2.0,
+        default=default_poll_interval,
         minimum=0.5,
         maximum=10.0,
     )
@@ -751,10 +782,7 @@ class LiveHarnessRunner:
                 name,
                 "FAIL",
                 time.perf_counter() - started,
-                {
-                    "failure_code": "gateway_call_failed",
-                    "error_type": type(exc).__name__,
-                },
+                _safe_gateway_error_metadata(exc),
             )
             raise HarnessFailure(f"{name}_gateway_call_failed") from None
         self._append(name, "PASS", time.perf_counter() - started, metadata)
@@ -1114,9 +1142,12 @@ class LiveHarnessRunner:
         if self.quote is None or self.config.limit_price is None:
             raise HarnessFailure("limit_guard_inputs_missing")
         if self.config.side == "BUY":
-            safe = self.config.limit_price <= self.quote * Decimal("0.50")
+            # A 1% quote buffer is non-marketable for the immediate roundtrip
+            # while remaining inside the UAT venue's accepted price band.
+            # Wider 10% and 50% distances are rejected as ORDER_PRICE_ILLEGAL.
+            safe = self.config.limit_price <= self.quote * Decimal("0.99")
         else:
-            safe = self.config.limit_price >= self.quote * Decimal("1.50")
+            safe = self.config.limit_price >= self.quote * Decimal("1.01")
         if not safe:
             raise HarnessFailure("limit_price_not_safely_non_marketable")
         self._check_notional(self.config.limit_price)
@@ -1184,6 +1215,14 @@ class LiveHarnessRunner:
         raise HarnessFailure(code)
 
     def _poll_cancelled_detail(self, client_order_id: str) -> tuple[Any, int]:
+        """Confirm cancellation from detail, or exact paginated history.
+
+        Webull UAT can acknowledge a cancel and remove the order from open
+        orders while its detail endpoint remains stale. History is an official
+        terminal-order source, so it is a valid corroborating fallback; open
+        absence alone is never sufficient.
+        """
+
         for attempt in range(self.config.poll_attempts):
             try:
                 response = _quiet_call(
@@ -1200,11 +1239,30 @@ class LiveHarnessRunner:
                 if filled > 0:
                     raise HarnessFailure("limit_order_filled_before_cancel")
                 if status in CANCELLED_STATUSES:
+                    self._cancel_confirmation_source = "detail"
                     return response, attempt + 1
                 if status in FILLED_STATUSES:
                     raise HarnessFailure("limit_order_terminal_fill_inconsistent")
+
+            try:
+                history = self._query_all_order_pages(history=True)
+            except Exception:
+                history = []
+            history_record = _find_correlated_order(history, client_order_id)
+            if history_record is not None:
+                history_status = _order_status(history_record)
+                history_filled = _filled_quantity(history_record)
+                if history_filled > 0:
+                    raise HarnessFailure("limit_order_filled_before_cancel")
+                if history_status in CANCELLED_STATUSES:
+                    for group in history:
+                        if _find_correlated_order(group, client_order_id) is not None:
+                            self._cancel_confirmation_source = "history"
+                            return group, attempt + 1
+                if history_status in FILLED_STATUSES:
+                    raise HarnessFailure("limit_order_terminal_fill_inconsistent")
             self._sleep_between_polls(attempt)
-        raise HarnessFailure("cancel_not_confirmed_by_detail")
+        raise HarnessFailure("cancel_not_confirmed_by_detail_or_history")
 
     def _poll_owned_detail_visible(
         self,
@@ -1462,6 +1520,9 @@ class LiveHarnessRunner:
                 lambda response: {
                     **self._validate_detail(response, client_order_id),
                     "cancelled": True,
+                    "confirmation_source": getattr(
+                        self, "_cancel_confirmation_source", "detail"
+                    ),
                     "poll_attempts": getattr(self, "_cancel_poll_attempts", 1),
                 },
             )

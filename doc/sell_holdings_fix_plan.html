@@ -1,169 +1,221 @@
-<!DOCTYPE html>
-<!-- Five-Step-Planner guide (rev.5) — Shannon Demon DNA: verify fill + reconcile position -->
+<!doctype html>
 <html lang="th">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>แผนแก้ (rev.5): ส่ง order และ reconcile จำนวนถือครองจริง</title>
-<style>
-  :root{
-    --bg:#faf7f2; --ink:#2b2b2b; --muted:#6f6a63;
-    --gold:#b8894b; --deep:#7a4b2b; --line:#e6ddd0;
-    --card:#ffffff; --accent:#3d6b5e; --warn:#c0603a;
-  }
-  *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--ink);
-    font-family:"Sarabun","Segoe UI",system-ui,sans-serif;line-height:1.7}
-  .wrap{max-width:920px;margin:0 auto;padding:32px 20px 80px}
-  header{text-align:center;padding:28px 0 8px;border-bottom:2px solid var(--gold)}
-  header h1{margin:0;font-size:1.55rem;color:var(--deep)}
-  header p{margin:6px 0 0;color:var(--muted)}
-  .rev{display:inline-block;background:#eef2ef;color:var(--accent);border-radius:6px;padding:2px 10px;font-size:.8rem;margin-top:8px}
-  .goalbar{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--gold);
-    border-radius:10px;padding:16px 20px;margin:24px 0}
-  .goalbar b{color:var(--deep)}
-  .metric{display:inline-block;background:#f3ede2;border-radius:8px;padding:4px 10px;margin:4px 6px 0 0;font-size:.9rem}
-  .evi{background:#eef4f1;border:1px solid #cfe1d8;border-radius:10px;padding:14px 18px;margin:16px 0}
-  .evi h3{margin:0 0 6px;color:var(--accent);font-size:1rem}
-  .step{margin:28px 0}
-  .step h2{display:flex;align-items:center;gap:12px;font-size:1.25rem;color:var(--deep);margin:0 0 4px}
-  .num{display:inline-flex;width:34px;height:34px;border-radius:50%;background:var(--gold);color:#fff;
-    align-items:center;justify-content:center;font-weight:700;flex:0 0 auto}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 18px;margin:10px 0}
-  .card h3{margin:0 0 6px;font-size:1rem;color:var(--accent)}
-  .tag{font-size:.78rem;background:#eef2ef;color:var(--accent);border-radius:6px;padding:2px 8px;margin-left:6px}
-  .tag.hot{background:#f7e4dc;color:var(--warn)}
-  .tag.strike{background:#efe7e2;color:#8a8178;text-decoration:line-through}
-  .why{margin:6px 0 0;padding-left:18px;color:var(--muted);font-size:.92rem}
-  .eq{font-family:"Cascadia Code",Consolas,monospace;background:#2b2b2b;color:#f5e9d6;
-    border-radius:8px;padding:10px 14px;margin:8px 0;overflow-x:auto;font-size:.9rem}
-  .eq .lbl{color:var(--gold);display:block;font-size:.8rem;margin-bottom:2px;font-family:inherit}
-  table{width:100%;border-collapse:collapse;margin:8px 0}
-  .scroll{overflow-x:auto}
-  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;font-size:.9rem;vertical-align:top}
-  th{background:#f3ede2;color:var(--deep)}
-  code{background:#f3ede2;border-radius:5px;padding:1px 6px;font-size:.85rem}
-  .loop{background:#fbf3ea;border:1px dashed var(--warn);border-radius:10px;padding:16px 20px;margin:14px 0}
-  .ladder td:first-child{font-weight:600}
-  .done{color:#2f7d4f;font-weight:700}
-  .todo{color:var(--warn);font-weight:700}
-  .big{background:#fdeee7;border:1px solid #e9c4b3;border-radius:10px;padding:14px 18px;margin:16px 0}
-  footer{text-align:center;color:var(--muted);font-size:.85rem;margin-top:40px}
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Webull API Overhaul — Five-Step Plan rev.6</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7fb;
+      --card: #fff;
+      --ink: #18212f;
+      --muted: #5e6979;
+      --line: #dce3ec;
+      --blue: #1859c9;
+      --green: #18794e;
+      --amber: #9a6700;
+      --red: #b42318;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font: 16px/1.65 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    main { max-width: 1040px; margin: auto; padding: 32px 20px 64px; }
+    header, section {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 22px;
+      margin-bottom: 18px;
+    }
+    header { border-top: 5px solid var(--blue); }
+    h1, h2, h3 { line-height: 1.3; margin-top: 0; }
+    h1 { font-size: clamp(1.65rem, 3vw, 2.25rem); margin-bottom: 8px; }
+    h2 { color: var(--blue); font-size: 1.3rem; }
+    h3 { font-size: 1.05rem; margin-bottom: 6px; }
+    p, ul, ol { margin-top: 6px; }
+    code {
+      padding: 2px 6px;
+      border-radius: 5px;
+      background: #eef2f7;
+      font-size: .9em;
+    }
+    .meta, .note { color: var(--muted); }
+    .status {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 999px;
+      font-size: .82rem;
+      font-weight: 700;
+    }
+    .done { color: var(--green); background: #e8f5ee; }
+    .pending { color: var(--amber); background: #fff4d6; }
+    .blocked { color: var(--red); background: #feeceb; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 12px;
+    }
+    .box {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 14px;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { color: var(--muted); font-size: .86rem; }
+    .scroll { overflow-x: auto; }
+    .callout {
+      border-left: 4px solid var(--amber);
+      background: #fffaf0;
+      padding: 12px 15px;
+      border-radius: 6px;
+    }
+    footer { color: var(--muted); text-align: center; font-size: .88rem; }
+  </style>
 </head>
 <body>
-<div class="wrap">
+<main>
   <header>
-    <h1>ทำไมส่ง order แล้ว “จำนวนถือครอง (หุ้น)” เท่าเดิม — แผนแก้ (final)</h1>
-    <p>Shannon Demon DNA bot · Goals → Problems → Diagnosis → Design → Do it</p>
-    <div class="rev">rev.5 · Order detail ผ่าน v3 สำหรับ Webull TH · bounded polling · reconcile Positions หลัง fill</div>
+    <span class="status done">rev.6 · API overhaul implemented</span>
+    <h1>Webull API Overhaul — Five-Step Planner</h1>
+    <p>ยกเครื่องเส้นทางซื้อขายให้ยึดความสามารถของ Manual Test Lab และสัญญา API ทางการ โดยถือว่า “ส่งคำสั่งสำเร็จ” ยังไม่เท่ากับ “ได้รับการ fill และ position เปลี่ยนจริง”</p>
+    <p class="meta">สถานะ ณ ตอนนี้: regression tests ผ่านออฟไลน์ 276 tests และ UAT จริงผ่านครบทั้ง read-preview, MARKET full-fill/position reconciliation และ LIMIT cancel roundtrip; ผลนี้ไม่ใช่หลักฐานว่า production หรือเงินจริงผ่าน</p>
   </header>
 
-  <div class="evi">
-    <h3>🔬 หลักฐานจาก log ล่าสุด (จำนวนถือครองขยับ “ผิดที่”)</h3>
-    <ul style="margin:6px 0 0;padding-left:20px;font-size:.93rem">
-      <li><b>3 SELL ของบอท</b> (14:20–14:30, qty≈0.10/ไม้) → holding นิ่งที่ <code>4.773</code></li>
-      <li>holding ขยับ <code>4.773 → 3.773</code> (พอดี <b>−1.0 หุ้นเต็ม</b>) ช่วง 15:00–15:10 ที่ <b>ไม่มีออร์เดอร์บอท</b> = คำสั่งมือ SELL 1 หุ้นจาก Manual Test Lab</li>
-      <li>BUY ของบอทหลังจากนั้น (qty≈0.95) → holding แช่ <code>3.773</code> · 3 SELL ติดกันไม่ถูก <code>has_open_order</code> บล็อก → ออร์เดอร์ที่รับไม่ได้ค้างเป็น open (ถูก drop/expire) และไม่ fill</li>
-      <li><b>สรุป</b>: หุ้นเต็ม fill ได้ · <b>ออร์เดอร์เศษหุ้นของบอท “รับ (order_id) แต่ไม่ fill”</b> — payload บอทเหมือน Manual Test Lab ทุกฟิลด์ สิ่งที่ขาดคือ “การยืนยัน”</li>
-    </ul>
-  </div>
-
-  <div class="big">
-    <b>🧭 คำตอบของโจทย์:</b> ออร์เดอร์ของบอท “ถูกรับจริง” (มี order_id) แต่ <b>ไม่ถูก fill</b> จำนวนถือครองจึงนิ่ง ·
-    บอทวางออร์เดอร์แบบ <b>blind</b> แล้ว log ว่า <code>ORDER_SUBMITTED</code> ทันที <b>โดยไม่เคยตรวจว่า fill จริงไหม</b> (ต่างจาก Manual Test Lab ที่มีปุ่ม Order detail / Positions) จึงดูเหมือน “ส่งแล้วแต่หุ้นไม่ลด”
-  </div>
-
-  <!-- STEP 1 -->
-  <div class="goalbar">
-    <b>🎯 เป้าหมาย (Step 1):</b> หลัง place ทุกครั้งให้บอท “ยืนยันการ fill จริง” (order detail แบบเดียวกับ Manual Test Lab) แล้ว log ตามความจริง<br>
-    <span class="metric">ตัวชี้วัด: log สะท้อนการ fill จริง</span>
-    <span class="metric">ปัจจุบัน: blind ORDER_SUBMITTED · ออร์เดอร์ที่ไม่ fill มองไม่เห็น</span>
-    <span class="metric">เป้า: ORDER_FILLED / ORDER_NOT_FILLED ชัด 100%</span>
-  </div>
-
-  <!-- STEP 2 -->
-  <div class="step">
-    <h2><span class="num">2</span> Problems</h2>
-    <div class="card"><h3>P1 — ออร์เดอร์เศษหุ้นบอท “รับ (order_id) แต่ไม่ fill” <span class="tag hot">severity 5/5</span></h3>
-      qty นิ่งทุก tick · มีแค่ −1.0 หุ้นเต็ม (คำสั่งมือ) ที่ fill ได้</div>
-    <div class="card"><h3>P2 — บอทวางออร์เดอร์แบบ blind: log ORDER_SUBMITTED โดยไม่ยืนยัน fill <span class="tag hot">severity 5/5</span></h3>
-      ออร์เดอร์ที่รับแต่ไม่ fill จึงมองไม่เห็น → ดูเหมือน “ส่งจริงแต่หุ้นไม่ลด”</div>
-    <div class="card"><h3>P3 — อาจรันบน UAT (รับแต่ไม่ fill) <span class="tag">severity 4/5</span></h3>
-      default <code>WEBULL_ENV=uat</code> · ต้องแยกจาก P1 ด้วยการยืนยัน fill + คำเตือน</div>
-  </div>
-
-  <!-- STEP 3 -->
-  <div class="step">
-    <h2><span class="num">3</span> Diagnosis</h2>
-    <div class="card"><h3>RC1 — บอทไม่ยืนยันการ fill หลัง place (blind) <span class="tag hot">w = 0.65 ▲</span></h3>
-      <ol class="why">
-        <li>ทำไม log ดูเหมือนขายแต่หุ้นไม่ลด? → บอทถือว่า place สำเร็จ (order_id) = เสร็จ</li>
-        <li>ทำไมถึงพลาด? → ไม่เคยอ่าน <code>filled_quantity</code>/สถานะจริงกลับมา</li>
-        <li>Manual Test Lab ต่างยังไง? → มีปุ่ม <code>Order detail / Positions</code> ให้ “ยืนยัน” เสมอ</li>
-      </ol>
-    </div>
-    <div class="card"><h3>RC2 — เศษหุ้น/สภาพตลาด (หรือ UAT) ทำให้ “รับแต่ไม่ fill” <span class="tag hot">w = 0.35</span></h3>
-      <ol class="why">
-        <li>หุ้นเต็ม fill ได้ · เศษหุ้นบอทไม่ fill → ถูก drop/expire</li>
-        <li>หรือ endpoint = UAT sandbox ที่ไม่ fill กับตำแหน่งจริง</li>
-      </ol>
-    </div>
-    <div class="card"><h3><span class="tag strike">RC (เดิม): payload ต่างจาก Manual Test Lab</span> — <b>ตัดทิ้ง</b></h3>
-      ตรวจแล้ว payload เหมือนกันทุกฟิลด์ (<code>order_v3.place_order</code>, <code>entrust_type=QTY</code>) → การจัด payload ให้ตรงไม่เปลี่ยนอะไร</div>
-  </div>
-
-  <!-- STEP 4 -->
-  <div class="step">
-    <h2><span class="num">4</span> Design (π = Δ/c)</h2>
-    <div class="scroll">
-    <table>
-      <tr><th>อันดับ</th><th>มาตรการ</th><th>ยิงที่</th><th>สถานะ</th></tr>
-      <tr><td>1</td><td><b><code>broker.get_order_status()</code></b> อ่าน configured <code>order_v3.get_order_detail</code> สำหรับ Webull TH → <code>status</code> + <code>filled_quantity</code></td><td>RC1</td><td class="done">✔ ทำแล้ว</td></tr>
-      <tr><td>2</td><td>หลัง place ที่ accepted → ยืนยัน fill แล้ว log <b><code>ORDER_FILLED</code></b> / <b><code>ORDER_NOT_FILLED</code></b>(+เหตุผล) / <code>ORDER_SUBMITTED</code>(ค้าง)</td><td>RC1</td><td class="done">✔ ทำแล้ว</td></tr>
-      <tr><td>3</td><td>ยืนยันเป็น <b>best-effort</b> (อ่านไม่ได้ → <code>fill_verified=false</code> ไม่ล้ม tick ไม่ roll back DNA step)</td><td>RC1</td><td class="done">✔ ทำแล้ว</td></tr>
-      <tr><td>4</td><td>แนบ <code>filled_quantity/order_status</code> + <code>sandbox_note</code> (UAT) + <code>/health</code> warning ให้แยกสาเหตุได้</td><td>RC2</td><td class="done">✔ ทำแล้ว</td></tr>
-      <tr><td>5</td><td><b>ตั้ง <code>WEBULL_ENV=prod</code></b> แล้ว deploy → ยืนยันว่า <code>ORDER_FILLED</code> ตรงกับ qty ที่ลดจริง</td><td>RC2</td><td class="todo">ผู้ใช้</td></tr>
-      <tr><td>6</td><td>หลัง fill ให้อ่าน <b>Account Positions</b> แบบ bounded → บันทึก <code>position_before/after/delta</code> และอัปเดต <code>market_state.quantity</code> ที่ Dashboard ใช้</td><td>RC1</td><td class="done">✔ ทำแล้ว</td></tr>
-    </table>
-    </div>
-  </div>
-
-  <!-- STEP 5 -->
-  <div class="step">
-    <h2><span class="num">5</span> Do it + วัดผล</h2>
-    <div class="scroll">
-    <table>
-      <tr><th>การกระทำ</th><th>ผู้รับผิดชอบ</th><th>สถานะ</th></tr>
-      <tr><td>broker.py: <code>OrderStatus</code> + configured v3 <code>get_order_status/get_order_open</code> + <code>get_position_quantity</code></td><td>โค้ด (PR นี้)</td><td class="done">เสร็จ</td></tr>
-      <tr><td>main.py: bounded <code>_verify_fill</code> + <code>_reconcile_position</code> + อัปเดตจำนวนถือครองหลัง order ใน log/response</td><td>โค้ด (PR นี้)</td><td class="done">เสร็จ</td></tr>
-      <tr><td>เทสต์ <b>99 ผ่าน</b> (TH v3 query, bounded polling, fill truth, Positions reconcile, best-effort fallback)</td><td>โค้ด (PR นี้)</td><td class="done">เสร็จ</td></tr>
-      <tr><td>ตั้ง WEBULL_ENV=prod · เช็ค <code>/health</code> ว่า trading_environment=prod</td><td>ผู้ใช้</td><td class="todo">รอ</td></tr>
-      <tr><td>ปล่อย 1 tick → ยืนยันแถวเดียวกันเป็น <code>ORDER_FILLED</code> + <code>position_reconciled=true</code> + qty ขยับจริง (หรือ <code>ORDER_NOT_FILLED</code> พร้อมเหตุผล)</td><td>ผู้ใช้</td><td class="todo">รอ</td></tr>
-    </table>
-    </div>
-
-    <h3 style="color:var(--accent);margin-top:16px">สมการวัดผล</h3>
-    <div class="eq"><span class="lbl">อัตรา fill จริง</span>F = filled_orders / intended_orders   (เป้า → 1)</div>
-    <div class="eq"><span class="lbl">ตำแหน่งขยับจริง (prod)</span>Δqty_actual = qty(n−1) − qty(n)  ควร ~ filled_quantity</div>
-
-    <div class="loop">
-      <h3 style="margin-top:0;color:var(--warn)">🔁 Control loop</h3>
-      <div class="eq"><span class="lbl">error</span>e_n = order_qty − filled_quantity   (บน prod, ต่อไม้)</div>
-      <div class="scroll">
-      <table class="ladder">
-        <tr><th>สังเกตจาก log</th><th>แปลว่า</th><th>ทำต่อ</th></tr>
-        <tr><td>ORDER_FILLED + qty ลดจริง</td><td>สำเร็จ</td><td>หยุด (|e_n| ≤ ε=0.02)</td></tr>
-        <tr><td>ORDER_NOT_FILLED (เศษหุ้นไม่ fill)</td><td>รับแต่ไม่ fill</td><td>Step 3 · ตรวจ prod/uat · ลอง session/หุ้นเต็ม/notional เพื่อยืนยันกฎ fractional</td></tr>
-        <tr><td>มี sandbox_note (is_production=false)</td><td>ยังรัน UAT</td><td>Step 4 · มาตรการ 5 (ตั้ง prod)</td></tr>
-        <tr><td>fill_verified=false บ่อย</td><td>อ่าน detail ไม่ได้</td><td>Step 4 · ตรวจสิทธิ์ get_order_detail/เครือข่าย</td></tr>
-      </table>
+  <section>
+    <h2>1. Goals — นิยามผลสำเร็จ</h2>
+    <div class="grid">
+      <div class="box">
+        <h3>ความถูกต้องของ order</h3>
+        <p>ทุก order ต้องมีตัวตนที่ตรวจย้อนกลับได้ด้วย <code>client_order_id</code>/<code>order_id</code>, สถานะ terminal ที่เชื่อถือได้ และยอด fill สะสมที่ไม่ถอยหลัง</p>
       </div>
-      <p style="font-size:.9rem;margin:8px 0 0"><b>ลูป:</b> ε = 0.02 หุ้น · K = 1.0 · n_max = 5</p>
+      <div class="box">
+        <h3>ความถูกต้องของ position</h3>
+        <p>ประกาศ <code>ORDER_FILLED</code> ได้ต่อเมื่อ <code>position_before</code>, <code>position_after</code> และ delta ตรงกับ fill ภายใน epsilon <code>1e-6</code></p>
+      </div>
+      <div class="box">
+        <h3>Acceptance gate</h3>
+        <p>ต้องผ่าน UAT read/preview, market place และ limit place/cancel ครบ 100% ก่อน commit/push ส่งงาน</p>
+      </div>
     </div>
-  </div>
+  </section>
 
-  <footer>สร้างด้วย five-step-planner · rev.5 · Goals → Problems → Diagnosis → Design → Do it</footer>
-</div>
+  <section>
+    <h2>2. Problems — ช่องว่างเดิม</h2>
+    <ul>
+      <li>เคยถือว่า response จาก place คือผลสำเร็จ ทั้งที่ order อาจยัง pending, partial, cancelled หรือ failed</li>
+      <li>การค้นหา order และ open-order guard อาจอ่านเพียงหน้าแรกหรือยอมรับ response หลวมเกินไป</li>
+      <li>quote เคยเสี่ยง fallback ไปใช้ราคาปิด ซึ่งไม่ใช่ราคาปัจจุบันสำหรับ safety gate</li>
+      <li>สถานะระหว่าง invocation ไม่แข็งแรงพอ ทำให้เสี่ยงส่งซ้ำหรือประกาศ fill ก่อน position reconcile</li>
+      <li>ค่า environment, endpoint, account และ mutation intent ต้องผูกแบบ exact เพื่อป้องกันยิงผิดบัญชี</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>3. Diagnosis — สัญญา API ที่ใช้จริง</h2>
+    <p>ใช้ SDK ทางการเพียงเส้นทางเดียว: <code>account_v2</code> สำหรับ account/balance/positions, Market Data สำหรับ quote และ <code>order_v3</code> สำหรับ preview/place/open/history/detail/cancel โดยตั้ง endpoint ก่อนสร้าง client และตรวจ schema แบบ fail closed</p>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>Operation</th><th>รูปทรง response ที่ยอมรับ</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Account list</td><td>top-level array; รายการมี <code>account_id</code></td></tr>
+          <tr><td>Positions</td><td>top-level array; รายการมี <code>symbol</code> และ <code>quantity</code></td></tr>
+          <tr><td>Quote snapshot</td><td>top-level array; รายการมี <code>symbol</code> และ <code>price</code> โดยไม่ fallback เป็น close</td></tr>
+          <tr><td>Preview</td><td>object ที่มี <code>estimated_cost</code> และ <code>estimated_transaction_fee</code></td></tr>
+          <tr><td>Place / Cancel</td><td>flat object ที่ผูกกับ <code>client_order_id</code> และ <code>order_id</code></td></tr>
+          <tr><td>Open / History</td><td>top-level array ของ group; แต่ละ group มี <code>client_order_id</code> และ <code>orders[]</code> โดย order ใช้ <code>status</code>, <code>filled_quantity</code>, <code>total_quantity</code>, <code>symbol</code>, <code>instrument_type</code></td></tr>
+          <tr><td>Detail</td><td>top-level group object เดียวที่มี <code>orders[]</code>; ไม่ค้นแบบ recursive ใน wrapper ที่ไม่อยู่ในสัญญา</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>4. Design — Manual Test Lab 10 operations</h2>
+    <p>เริ่มจาก authenticated connection ที่ endpoint/region/account ตรงกัน แล้วใช้ flow ต่อไปนี้เป็นแนวทางหลัก 100%:</p>
+    <ol>
+      <li>Account list และยืนยัน account identity</li>
+      <li>Balance</li>
+      <li>Positions</li>
+      <li>Quote snapshot</li>
+      <li>Market order preview</li>
+      <li>Market order real submission</li>
+      <li>Open orders แบบ paginate ทุกหน้า</li>
+      <li>Order history แบบ paginate ทุกหน้า</li>
+      <li>Order detail</li>
+      <li>Cancel order และยืนยันสถานะ <code>CANCELLED</code>/<code>CANCELED</code></li>
+    </ol>
+
+    <h3>Durable lifecycle ข้าม invocation</h3>
+    <p><code>PREPARED → SUBMISSION_UNKNOWN | SUBMITTED → PARTIAL_FILLED → FILLED | CANCELLED/CANCELED | FAILED</code></p>
+    <ul>
+      <li>บันทึก lifecycle แบบ deterministic ด้วย identity ของ client order; terminal state เป็น absorbing</li>
+      <li><code>filled_quantity</code> เพิ่มได้อย่างเดียว และการส่ง place/cancel เป็น at-most-once</li>
+      <li>หาก process จบหรือ timeout จะ reconcile pending order จาก detail → open → history ใน invocation ถัดไปก่อนอนุญาต order ใหม่</li>
+      <li>สถานะ fill ยังไม่เสร็จจนกว่า <code>position_reconciled=true</code> และ delta ของ position ตรงกับยอด fill</li>
+    </ul>
+
+    <h3>Safety gates</h3>
+    <ul>
+      <li>กำหนด <code>WEBULL_ENV</code> ชัดเจน; endpoint, region, API version, account fingerprint, strategy, symbol และ storage identity ต้องตรงแบบ exact</li>
+      <li>preview เป็นข้อบังคับ; quote ต้องเป็น field <code>price</code>; page size, session และ client ID ต้องอยู่ในขอบเขตทางการ</li>
+      <li>ตรวจ open orders ครบทุกหน้าและ fail closed เมื่อ schema ผิด, duplicate หรือ response คลุมเครือ</li>
+      <li>mutation ต้อง arm ด้วย account/order binding แบบ exact และมี notional cap</li>
+      <li>cancel ได้เฉพาะ order ID ที่ test run นั้นสร้างเอง และเรียก cancel ได้ไม่เกินหนึ่งครั้ง</li>
+      <li>ไม่บันทึก key, secret, token หรือ raw API response ลง source, state, test artifact หรือ log</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>5. Do it — หลักฐานและสถานะส่งมอบ</h2>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>Gate</th><th>สิ่งที่ต้องพิสูจน์</th><th>สถานะ</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Offline regression</td>
+            <td>gateway, strict schemas, pagination, broker, lifecycle, reconciliation, config และ live-test harness</td>
+            <td><span class="status done">PASS · 276 tests</span></td>
+          </tr>
+          <tr>
+            <td>UAT read-preview</td>
+            <td>authenticated connection + account/balance/positions/quote/open/history/detail + market preview โดยไม่ place</td>
+            <td><span class="status done">PASS · real UAT · 8 steps</span></td>
+          </tr>
+          <tr>
+            <td>UAT market-place</td>
+            <td>preview → place → detail/history → <code>FILLED</code> → exact position delta</td>
+            <td><span class="status done">PASS · FILLED + reconciled</span></td>
+          </tr>
+          <tr>
+            <td>UAT limit-cancel</td>
+            <td>preview → place → พบใน open orders → cancel ครั้งเดียว → terminal <code>CANCELLED/CANCELED</code> จาก detail/history → ไม่เหลือใน open orders ทุกหน้า</td>
+            <td><span class="status done">PASS · CANCELED + absent</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout">
+      <strong>Stop condition:</strong> ผ่านแล้ว—UAT ทั้งสาม gate แสดง PASS จาก harness เดียวกัน จึงพร้อม commit/push การทดสอบ UAT ไม่ใช่หลักฐานว่า production หรือเงินจริงผ่าน
+    </div>
+    <p class="note">บัญชี UAT ที่เผยแพร่ร่วมกันอาจถูกผู้ทดสอบรายอื่นเปลี่ยนสถานะได้ จึงต้องยืนยัน account binding, order ownership และ position delta ทุกครั้ง โดยไม่ฝังข้อมูลรับรองไว้ในเอกสารนี้</p>
+  </section>
+
+  <footer>Five-Step Planner rev.6 · Goals → Problems → Diagnosis → Design → Do it</footer>
+</main>
 </body>
 </html>

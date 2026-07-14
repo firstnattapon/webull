@@ -5,6 +5,18 @@
   "scope": "Webull Thailand API overhaul and durable dashboard order lifecycle",
   "repository": "firstnattapon/webull",
   "branch": "codex/fix-webull-order-reconcile",
+  "target_metric": {
+    "name": "required_acceptance_gate_pass_rate",
+    "current": 1.0,
+    "target": 1.0,
+    "unit": "ratio",
+    "horizon": "before final commit and handoff"
+  },
+  "assumptions": [
+    "ข้อมูลรับรองที่ผู้ใช้ให้ตรงกับ shared Webull UAT Test Account ที่เผยแพร่ในเอกสาร SDK",
+    "UAT พิสูจน์ API contract และ simulated order lifecycle แต่ไม่พิสูจน์เงินจริงหรือ production routing",
+    "ผล position delta บน shared UAT อาจถูกรบกวนโดยผู้ทดสอบรายอื่น จึงต้องยืนยันด้วย exact client_order_id และค่าความคลาดเคลื่อนคงที่"
+  ],
   "step_1_goals": {
     "status": "complete",
     "objective": "ใช้ flow ของ Manual Test Lab เป็นฐานสำหรับ authenticated connection, account, balance, positions, quote, open orders, history, detail, preview, place และ cancel พร้อมทำให้ order/position บน Dashboard อัปเดตต่อเนื่องข้าม invocation",
@@ -174,7 +186,7 @@
     "status": "complete",
     "solutions": [
       {
-        "rank": 1,
+        "rank": 3,
         "id": "S1",
         "targets": ["RC1", "RC4"],
         "design": "WebullApiGateway: initialize TradeClient ครั้งเดียว, ใช้ MarketData โดยตรง, account_v2 + order_v3, public Manual methods ครบ, exact client_order_id correlation และ sanitized errors",
@@ -183,7 +195,7 @@
         "priority_score": 3.8
       },
       {
-        "rank": 2,
+        "rank": 5,
         "id": "S2",
         "targets": ["RC2", "RC3"],
         "design": "Firestore durable lifecycle keyed ด้วย hash(client_order_id), transactionally mirror pending_order และ update document เดิมจน terminal",
@@ -192,7 +204,7 @@
         "priority_score": 3.27
       },
       {
-        "rank": 3,
+        "rank": 6,
         "id": "S3",
         "targets": ["RC2"],
         "design": "ก่อน market/DNA gate ทุก invocation ให้ reconcile pending detail + positions; partial fill ไม่ terminal และ filled position read failure ต้อง retry invocation ถัดไป",
@@ -201,7 +213,7 @@
         "priority_score": 3.13
       },
       {
-        "rank": 4,
+        "rank": 1,
         "id": "S4",
         "targets": ["RC5"],
         "design": "explicit WEBULL_ENV, official endpoint allowlist, region th, order v3, valid session, mandatory preview และ account fingerprint binding",
@@ -210,7 +222,7 @@
         "priority_score": 6.0
       },
       {
-        "rank": 5,
+        "rank": 4,
         "id": "S5",
         "targets": ["RC1", "RC5"],
         "design": "metadata-only live UAT harness: read-preview default; MARKET mutation และ non-marketable LIMIT cancel เป็นโหมดแยกพร้อม exact arming/order binding",
@@ -219,7 +231,7 @@
         "priority_score": 3.68
       },
       {
-        "rank": 6,
+        "rank": 2,
         "id": "S6",
         "targets": ["RC2", "RC5"],
         "design": "client_order_id ใส่ nonce และ Firestore transaction ปฏิเสธ second nonterminal intent ก่อนเรียก Webull",
@@ -244,6 +256,10 @@
       "timeout หลัง place คือ ambiguous; query exact ID ภายหลังและห้าม resubmit",
       "pending environment/account fingerprint ต้องตรงกับ runtime ปัจจุบัน",
       "terminal callback เก่าห้าม clear pending intent ใหม่",
+      "lifecycle และ cumulative filled_quantity ต้องเดินหน้าแบบ monotonic และ terminal state เป็น absorbing",
+      "account/positions/quote/open/history/detail/preview/place/cancel ต้องตรง official top-level response shape และ exact field names",
+      "open/history ต้อง paginate ทุกหน้าที่ page_size=100 ก่อนสรุปว่าไม่พบ order และ quote flags ต้องส่งเป็น string true/false",
+      "ORDER_FILLED จะ terminal ได้เมื่อ exact position delta reconcile ภายใน epsilon=0.000001 เท่านั้น",
       "raw signed request/credential ห้าม persist หรือ print"
     ]
   },
@@ -275,7 +291,7 @@
         "action": "รัน offline test suite, compile, diff check และ artifact scan",
         "status": "complete",
         "evidence": {
-          "tests": "190 passed",
+          "tests": "276 passed",
           "compile": "passed",
           "diff_check": "passed",
           "sdk_log_or_token_artifacts": 0
@@ -284,17 +300,37 @@
       {
         "id": "A6",
         "action": "รัน real-network UAT read-preview ผ่าน secure prompt",
-        "status": "blocked_waiting_for_secure_runtime_credential_input"
+        "status": "complete",
+        "evidence": {
+          "network": "real",
+          "environment": "uat",
+          "mode": "read-preview",
+          "steps_passed": 8,
+          "mutations_enabled": false
+        }
       },
       {
         "id": "A7",
         "action": "รัน armed UAT MARKET place และ LIMIT cancel roundtrip",
-        "status": "blocked_waiting_for_secure_runtime_credential_input_and_order_confirmation"
+        "status": "complete",
+        "evidence": {
+          "market_place": {
+            "full_fill_confirmed": true,
+            "history_visible": true,
+            "position_reconciled": true
+          },
+          "limit_cancel": {
+            "place_visible_open": true,
+            "cancel_accepted_once": true,
+            "terminal_status": "CANCELED",
+            "absent_from_all_open_pages": true
+          }
+        }
       },
       {
         "id": "A8",
         "action": "commit, push และ update Draft PR หลัง live gates ผ่าน",
-        "status": "pending",
+        "status": "ready_to_commit_and_push",
         "depends_on": ["A6", "A7"]
       }
     ],
@@ -329,15 +365,15 @@
       "evaluation_loop": {
         "control_error": "e_n = expected_filled_quantity - observed_position_delta",
         "convergence_rate": "r_n = |e_n| / max(|e_(n-1)|, epsilon)",
-        "epsilon": 0.00001,
+        "epsilon": 0.000001,
         "gain_K": 1.0,
         "correction": "u_(n+1) = observe exact order detail and positions again; never submit corrective order automatically",
         "n_max_per_invocation": 3,
-        "cross_invocation_limit": "continue until terminal detail and a readable post-order position snapshot",
+        "cross_invocation_limit": "continue until terminal detail and position_reconciled=true for every filled quantity; a merely readable snapshot is insufficient",
         "stop_conditions": [
-          "ORDER_FILLED with position_after observed",
+          "ORDER_FILLED only with position_reconciled=true and exact expected position delta within epsilon",
           "ORDER_NOT_FILLED terminal with filled_quantity = 0",
-          "ORDER_PARTIAL_FILLED_TERMINAL with position_after observed",
+          "ORDER_PARTIAL_FILLED_TERMINAL only with position_reconciled=true for cumulative filled_quantity",
           "cancel confirmed by terminal detail and absent from open orders"
         ],
         "escalation": [
@@ -360,8 +396,8 @@
       }
     },
     "handoff_gate": {
-      "ready_to_commit": false,
-      "reason": "offline gates ผ่าน แต่ผู้ใช้กำหนดให้ real UAT API ผ่านก่อนส่งงาน; ยังไม่มี credential ใน process environment และจะไม่คัดลอกจาก chat ลง command",
+      "ready_to_commit": true,
+      "reason": "offline regression ผ่าน 276 tests และ real UAT ผ่าน read-preview, MARKET full-fill/history/position reconciliation และ LIMIT place/open/cancel/terminal/absence ครบ โดยไม่มี credential ใน source, command, planner หรือ log",
       "next_command": "powershell -ExecutionPolicy Bypass -File .\\scripts\\run_webull_live_test.ps1",
       "secrets_in_file": false
     }
