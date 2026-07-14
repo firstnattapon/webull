@@ -189,7 +189,7 @@ Cloud Run → shannon-demon-bot  ← service ขึ้น Active หรือย
 ```bash
 gcloud run services update "$SERVICE_NAME" \
   --region="$REGION" \
-  --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},STRATEGY_ID=SHANNON_DEMON_DNA,SYMBOL=SMR,FIX_C=1500,P0=9.00,DIFF=30,DNA_CODE=bypass:100,START_TIMESTAMP=0,FIRESTORE_STATE_COLLECTION=shannon_demon_state,FIRESTORE_TRADE_COLLECTION=shannon_demon_trades,FIRESTORE_STATE_DOCUMENT=SHANNON_DEMON_DNA_SMR,WEBULL_ENV=uat,WEBULL_API_VERSION=v3,WEBULL_REGION=th,WEBULL_SUPPORT_TRADING_SESSION=CORE,WEBULL_PREVIEW_ORDERS=true" \
+  --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},STRATEGY_ID=SHANNON_DEMON_DNA,SYMBOL=SMR,FIX_C=1500,P0=9.00,DIFF=30,DNA_CODE=bypass:100,START_TIMESTAMP=0,SCHEDULE_SLOT_SECONDS=300,FIRESTORE_STATE_COLLECTION=shannon_demon_state,FIRESTORE_TRADE_COLLECTION=shannon_demon_trades,FIRESTORE_STATE_DOCUMENT=SHANNON_DEMON_DNA_SMR,WEBULL_ENV=uat,WEBULL_API_VERSION=v3,WEBULL_REGION=th,WEBULL_SUPPORT_TRADING_SESSION=CORE,WEBULL_PREVIEW_ORDERS=true" \
   --concurrency=1 \
   --max-instances=1
 ```
@@ -286,6 +286,7 @@ gcloud run services logs read "$SERVICE_NAME" --region="$REGION" --limit=50
 | `PASS_WAITING_TO_START` | ยังไม่ถึงเวลา `START_TIMESTAMP` | ปกติ |
 | `PASS_DNA_ZERO` | DNA รอบนี้เป็น 0 เลยข้าม | ปกติ |
 | `PASS_THRESHOLD` | ราคายังไม่ขยับพอ (อยู่ในช่วง `DIFF`) | ปกติ |
+| `PASS_DUPLICATE_TICK` | ถูกเรียกซ้ำใน slot เดิม (เช่น Force run) เลยไม่กิน DNA step ซ้ำ | ปกติ (ต้องตั้ง `SCHEDULE_SLOT_SECONDS`) |
 | `OK` | ส่ง order แล้ว 🎉 | เช็คใน Webull |
 | `BROKER_ERROR` | Webull ตอบ error | เช็ค credentials / ดู log |
 | `ERROR` | config หรือระบบมีปัญหา | ดู log แล้วแก้ env var |

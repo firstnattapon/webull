@@ -603,6 +603,31 @@ def test_dna_exit_response_shapes_are_preserved(app, app_config, reservation, ex
     assert (body, code) == (expected, 200)
 
 
+def test_duplicate_slot_tick_passes_without_trading(app, app_config):
+    """A Force run inside an already-reserved slot must not touch the broker."""
+    get_broker = Mock()
+    body, code, mocks = invoke(
+        app,
+        load_app_config=Mock(return_value=app_config),
+        reserve_step=Mock(return_value=StepReservation(2, 0, duplicate=True)),
+        get_broker=get_broker,
+    )
+
+    assert (body, code) == ({"status": "PASS_DUPLICATE_TICK", "dna_step": 2}, 200)
+    get_broker.assert_not_called()
+
+
+def test_reserve_step_receives_configured_slot_width(app, app_config):
+    slotted = AppConfig(**{**app_config.__dict__, "schedule_slot_seconds": 600})
+    _, _, mocks = invoke(
+        app,
+        load_app_config=Mock(return_value=slotted),
+        reserve_step=Mock(return_value=StepReservation(1, 0)),
+    )
+
+    assert mocks["reserve_step"].call_args.kwargs["slot_seconds"] == 600
+
+
 def test_threshold_response_and_log_payload_are_preserved(app, app_config):
     broker_instance = Mock()
     broker_instance.get_position_and_price.return_value = MarketState(10.0, 100.0)

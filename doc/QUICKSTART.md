@@ -63,6 +63,7 @@ P0=9
 DIFF=30
 DNA_CODE=bypass:100
 START_TIMESTAMP=0
+SCHEDULE_SLOT_SECONDS=300
 FIRESTORE_STATE_COLLECTION=shannon_demon_state
 FIRESTORE_TRADE_COLLECTION=shannon_demon_trades
 FIRESTORE_STATE_DOCUMENT=SHANNON_DEMON_DNA_SMR
@@ -119,6 +120,10 @@ webull_api_version: ok
 9. Audience: Cloud Run Service URL
 
 > การกด Force run หรือเปิด Scheduler คือการเรียกบอตจริง และอาจส่ง UAT order เมื่อเงื่อนไขครบ
+
+> ตั้ง `SCHEDULE_SLOT_SECONDS` ให้เท่ากับรอบของ Scheduler เป็นวินาที (เช่น `*/5 * * * *` = `300`, `*/10` = `600`)
+> เพื่อไม่ให้การกด Force run หรือการยิงซ้ำใน slot เดียวกันกิน DNA step เกินรอบ — การเรียกซ้ำจะตอบ
+> `PASS_DUPLICATE_TICK` แทนการเทรด ถ้าตั้งเป็น `0` (ค่าเริ่มต้น) จะทำงานแบบเดิมคือทุก invocation กิน 1 step
 
 ## ใช้งานประจำ
 

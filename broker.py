@@ -557,8 +557,14 @@ def _retry(
     """
 
     def _backoff(attempt: int, status_code: int | None = None) -> float:
+        # 429 is Webull's ordinary rate limit; a retryable 417 is its
+        # OPENAPI_REPEAT_REQUEST throttle ("Please don't tap repeatedly.").
+        # Both mean the previous request is still being counted against us, so
+        # both need the longer base delay — re-arriving ~1s later can land
+        # inside the same repeat-request window and burn the remaining
+        # attempts on the very throttle the retry is trying to escape.
         delay_base = (
-            rate_limit_base_delay if status_code == 429 else base_delay
+            rate_limit_base_delay if status_code in (429, 417) else base_delay
         )
         return delay_base * (2 ** attempt) + random.uniform(0.0, max_jitter)
 

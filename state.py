@@ -24,6 +24,7 @@ import logging
 import math
 import re
 import threading
+import time
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -77,9 +78,16 @@ class LifecycleConflictError(LifecycleWriteError):
 
 @dataclass(frozen=True)
 class StepReservation:
-    """Result of reserving a DNA step — contains step index and signal."""
+    """Result of reserving a DNA step — contains step index and signal.
+
+    ``duplicate`` is True when the invocation landed in a schedule slot whose
+    step was already reserved (a console Force run, a duplicate scheduler
+    fire, a retried request). No step was consumed and ``dna_signal`` is 0;
+    the caller must not trade on it.
+    """
     dna_step: int
     dna_signal: int
+    duplicate: bool = False
 
     def to_dict(self) -> dict[str, int]:
         return {"dna_step": self.dna_step, "dna_signal": self.dna_signal}
@@ -145,6 +153,7 @@ def reserve_step(
     symbol: str,
     dna_length: int,
     signal_of: Callable[[int], int],
+    slot_seconds: int = 0,
 ) -> StepReservation:
     """Atomically read-and-increment the DNA step inside a transaction.
 
@@ -156,6 +165,15 @@ def reserve_step(
     (``dna_step >= dna_length``) nothing is written and the returned
     reservation carries signal 0 — the caller detects timeline end by
     comparing ``dna_step`` against the DNA length.
+
+    ``slot_seconds`` > 0 makes the reservation idempotent per schedule slot
+    (wall-clock buckets of that width, matching the Cloud Scheduler cron
+    interval). A second invocation inside an already-reserved slot — a
+    console Force run, a duplicate fire, a retried request — returns
+    ``duplicate=True`` and consumes nothing. Without this guard every extra
+    invocation advances the pointer out of its trained slot and permanently
+    shifts all remaining signals. 0 (default) preserves the historical
+    one-step-per-invocation behavior.
 
     Intentional: a reservation is never rolled back, even when the trade
     that follows fails. Each DNA index is trained against a specific
@@ -175,22 +193,36 @@ def reserve_step(
             data = (snapshot.to_dict() or {}) if snapshot.exists else {}
             dna_step = _parse_step(data.get("dna_step", 0))
 
+            slot_index: int | None = None
+            if slot_seconds > 0:
+                slot_index = int(time.time() // slot_seconds)
+                last_slot = data.get("last_reserved_slot")
+                if (
+                    isinstance(last_slot, int)
+                    and not isinstance(last_slot, bool)
+                    and last_slot == slot_index
+                ):
+                    return StepReservation(
+                        dna_step=dna_step,
+                        dna_signal=0,
+                        duplicate=True,
+                    )
+
             if dna_step >= dna_length:
                 return StepReservation(dna_step=dna_step, dna_signal=0)
 
             dna_signal = int(signal_of(dna_step))
-            txn.set(
-                doc_ref,
-                {
-                    "strategy_id": strategy_id,
-                    "symbol": symbol,
-                    "dna_step": dna_step + 1,
-                    "last_reserved_step": dna_step,
-                    "last_signal": dna_signal,
-                    "last_reserved_at": firestore_module.SERVER_TIMESTAMP,
-                },
-                merge=True,
-            )
+            reservation_payload: dict[str, Any] = {
+                "strategy_id": strategy_id,
+                "symbol": symbol,
+                "dna_step": dna_step + 1,
+                "last_reserved_step": dna_step,
+                "last_signal": dna_signal,
+                "last_reserved_at": firestore_module.SERVER_TIMESTAMP,
+            }
+            if slot_index is not None:
+                reservation_payload["last_reserved_slot"] = slot_index
+            txn.set(doc_ref, reservation_payload, merge=True)
             return StepReservation(dna_step=dna_step, dna_signal=dna_signal)
 
         return _reserve(transaction)
