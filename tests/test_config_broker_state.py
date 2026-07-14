@@ -495,6 +495,62 @@ def test_cancel_correlates_flat_response_and_confirms_detail():
     instance.get_order_status.assert_called_once_with("coid")
 
 
+def test_cancel_uses_history_when_detail_remains_stale():
+    instance = broker.WebullBroker.__new__(broker.WebullBroker)
+    instance.gateway = SimpleNamespace(cancel_order=Mock(return_value={
+        "client_order_id": "coid",
+        "order_id": "order-1",
+    }))
+    stale = broker.OrderStatus(
+        client_order_id="coid",
+        status="SUBMITTED",
+        filled_quantity=0.0,
+        raw_response={},
+    )
+    cancelled = broker.OrderStatus(
+        client_order_id="coid",
+        status="CANCELLED",
+        filled_quantity=0.0,
+        raw_response={},
+    )
+    instance.get_order_status = Mock(return_value=stale)
+    instance.lookup_order_status = Mock(return_value=cancelled)
+
+    result = instance.cancel_order("coid")
+
+    assert result["status"] == "CANCELLED"
+    instance.gateway.cancel_order.assert_called_once_with("coid")
+    instance.lookup_order_status.assert_called_once_with("coid")
+
+
+def test_lookup_prefers_terminal_history_over_stale_detail():
+    instance = broker.WebullBroker.__new__(broker.WebullBroker)
+    instance.get_order_detail = Mock(return_value={
+        "client_order_id": "coid",
+        "orders": [{
+            "client_order_id": "coid",
+            "status": "SUBMITTED",
+            "filled_quantity": "0",
+            "total_quantity": "1",
+        }],
+    })
+    instance.get_open_orders = Mock(return_value=[])
+    instance.get_order_history = Mock(return_value=[{
+        "client_order_id": "coid",
+        "orders": [{
+            "client_order_id": "coid",
+            "status": "CANCELLED",
+            "filled_quantity": "0",
+            "total_quantity": "1",
+        }],
+    }])
+
+    result = instance.lookup_order_status("coid")
+
+    assert result is not None
+    assert result.normalized_status == "CANCELLED"
+
+
 @pytest.mark.parametrize(
     "response",
     [

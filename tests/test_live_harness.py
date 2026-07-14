@@ -350,9 +350,58 @@ def test_cancel_guard_accepts_only_ids_created_by_same_run(monkeypatch):
     runner._assert_owned("created-this-run")
 
 
+@pytest.mark.parametrize("session", ["CORE", "ALL", "NIGHT", "ALL_DAY"])
+def test_harness_accepts_only_official_trading_sessions(monkeypatch, session):
+    _base_env(monkeypatch)
+    monkeypatch.setenv("WEBULL_TEST_SESSION", session)
+
+    assert live.load_harness_config(live.READ_ONLY_MODE).session == session
+
+
+def test_harness_rejects_unknown_trading_session(monkeypatch):
+    _base_env(monkeypatch)
+    monkeypatch.setenv("WEBULL_TEST_SESSION", "PRE")
+
+    with pytest.raises(live.HarnessFailure, match="invalid_webull_test_session"):
+        live.load_harness_config(live.READ_ONLY_MODE)
+
+
+def test_limit_cancel_has_longer_bounded_propagation_defaults(monkeypatch):
+    _base_env(monkeypatch)
+    read_config = live.load_harness_config(live.READ_ONLY_MODE)
+    _arm_limit_mutation(monkeypatch, limit_price="50")
+    limit_config = live.load_harness_config(live.LIMIT_CANCEL_MODE)
+
+    assert (read_config.poll_attempts, read_config.poll_interval_seconds) == (6, 2.0)
+    assert (limit_config.poll_attempts, limit_config.poll_interval_seconds) == (20, 3.0)
+
+
+def test_gateway_failure_metadata_exposes_only_bounded_status_and_code(monkeypatch):
+    _base_env(monkeypatch)
+    config = live.load_harness_config(live.READ_ONLY_MODE)
+    runner = live.LiveHarnessRunner(config, _ReadOnlyFakeGateway(config.account_id))
+
+    error = RuntimeError("secret response body")
+    error.status_code = 417
+    error.error_code = "ORDER_PRICE_INVALID"
+    with pytest.raises(live.HarnessFailure, match="diagnostic_gateway_call_failed"):
+        runner._execute("diagnostic", lambda: (_ for _ in ()).throw(error), lambda _: {})
+
+    metadata = runner.steps[-1].metadata
+    assert metadata == {
+        "failure_code": "gateway_call_failed",
+        "error_type": "RuntimeError",
+        "http_status": 417,
+        "upstream_error_code": "ORDER_PRICE_INVALID",
+    }
+    assert "secret response body" not in live.serialize_report(
+        {"steps": [runner.steps[-1].to_dict()]}, config.secret_values()
+    )
+
+
 def test_limit_cancel_requires_safely_non_marketable_price(monkeypatch):
     _base_env(monkeypatch)
-    _arm_limit_mutation(monkeypatch, limit_price="60")
+    _arm_limit_mutation(monkeypatch, limit_price="99.01")
     config = live.load_harness_config(live.LIMIT_CANCEL_MODE)
     runner = live.LiveHarnessRunner(config, _ReadOnlyFakeGateway(config.account_id))
     runner.quote = Decimal("100")
@@ -361,11 +410,26 @@ def test_limit_cancel_requires_safely_non_marketable_price(monkeypatch):
         runner._validate_non_marketable_limit()
 
     safe_runner = live.LiveHarnessRunner(
-        replace(config, limit_price=Decimal("50")),
+        replace(config, limit_price=Decimal("99")),
         _ReadOnlyFakeGateway(config.account_id),
     )
     safe_runner.quote = Decimal("100")
     safe_runner._validate_non_marketable_limit()
+
+    unsafe_sell_runner = live.LiveHarnessRunner(
+        replace(config, side="SELL", limit_price=Decimal("100.99")),
+        _ReadOnlyFakeGateway(config.account_id),
+    )
+    unsafe_sell_runner.quote = Decimal("100")
+    with pytest.raises(live.HarnessFailure, match="limit_price_not_safely_non_marketable"):
+        unsafe_sell_runner._validate_non_marketable_limit()
+
+    safe_sell_runner = live.LiveHarnessRunner(
+        replace(config, side="SELL", limit_price=Decimal("101")),
+        _ReadOnlyFakeGateway(config.account_id),
+    )
+    safe_sell_runner.quote = Decimal("100")
+    safe_sell_runner._validate_non_marketable_limit()
 
 
 class _StatefulMutationGateway(_ReadOnlyFakeGateway):
@@ -540,6 +604,37 @@ def test_limit_cancel_uses_generic_place_and_cancels_only_its_own_id(monkeypatch
     assert fake.cancel_calls == 1
     assert fake.cancelled_ids == [fake.created_id]
     assert "existing-order-for-detail" not in fake.cancelled_ids
+
+
+class _StaleCancelledDetailGateway(_StatefulMutationGateway):
+    def cancel_order(self, client_order_id):
+        response = super().cancel_order(client_order_id)
+        self.created_status = "CANCELED"
+        return response
+
+    def get_order_detail(self, client_order_id):
+        response = super().get_order_detail(client_order_id)
+        if client_order_id == self.created_id and self.created_status in live.CANCELLED_STATUSES:
+            response["orders"][0]["status"] = "SUBMITTED"
+        return response
+
+
+def test_limit_cancel_uses_exact_history_when_detail_remains_stale(monkeypatch):
+    _base_env(monkeypatch)
+    _arm_limit_mutation(monkeypatch)
+    monkeypatch.setattr(live.time, "sleep", lambda _seconds: None)
+    config = live.load_harness_config(live.LIMIT_CANCEL_MODE)
+    fake = _StaleCancelledDetailGateway(config.account_id)
+
+    report = live.run_harness(config, gateway_factory=lambda _config, _token_dir: fake)
+
+    assert report["status"] == "PASS"
+    confirmation = next(
+        step for step in report["steps"] if step["name"] == "limit_order_cancelled_detail"
+    )
+    assert confirmation["metadata"]["confirmation_source"] == "history"
+    assert confirmation["metadata"]["status_category"] == "CANCELED"
+    assert fake.cancel_calls == 1
 
 
 def test_order_correlation_uses_unique_documented_orders_only():

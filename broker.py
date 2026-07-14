@@ -714,6 +714,10 @@ class WebullBroker:
         for attempt in range(1, CANCEL_CONFIRM_ATTEMPTS + 1):
             try:
                 latest = self.get_order_status(client_order_id)
+                if latest.normalized_status not in {"CANCELLED", "CANCELED"}:
+                    corroborated = self.lookup_order_status(client_order_id)
+                    if corroborated is not None:
+                        latest = corroborated
             except BrokerError:
                 latest = None
             else:
@@ -891,7 +895,7 @@ class WebullBroker:
         client_order_id. It never authorizes a resubmission; the caller keeps a
         visible manual-review lifecycle until an operator resolves it.
         """
-        responses: list[Any] = []
+        statuses: list[OrderStatus] = []
         try:
             detail_response = self.get_order_detail(client_order_id)
         except BrokerHTTPError as exc:
@@ -902,18 +906,71 @@ class WebullBroker:
                 raise BrokerValidationError(
                     "Webull order detail must return one group object"
                 )
-            responses.append(detail_response)
-
-        open_response = self.get_open_orders(page_size=OPEN_ORDER_PAGE_SIZE)
-        history_response = self.get_order_history(page_size=OPEN_ORDER_PAGE_SIZE)
-        _documented_order_groups(open_response)
-        _documented_order_groups(history_response)
-        responses.extend((open_response, history_response))
-        for response in responses:
-            order = self._find_correlated_order(response, client_order_id)
+            order = self._find_correlated_order(detail_response, client_order_id)
             if order is not None:
-                return self._order_status_from_record(order, client_order_id)
-        return None
+                statuses.append(self._order_status_from_record(order, client_order_id))
+
+        for history in (False, True):
+            groups = self._read_all_order_query_groups(history=history)
+            order = self._find_correlated_order(groups, client_order_id)
+            if order is not None:
+                statuses.append(self._order_status_from_record(order, client_order_id))
+
+        if not statuses:
+            return None
+
+        # UAT can leave detail at SUBMITTED after cancel while history already
+        # reports CANCELLED and the order has disappeared from all open pages.
+        # Prefer the most advanced corroborated lifecycle rather than the first
+        # endpoint read, while cumulative fill remains the primary tiebreaker.
+        terminal_rank = {
+            "FILLED": 5,
+            "CANCELLED": 4,
+            "CANCELED": 4,
+            "EXPIRED": 3,
+            "REJECTED": 2,
+            "FAILED": 1,
+        }
+
+        def lifecycle_key(status: OrderStatus) -> tuple[float, int, int]:
+            normalized = status.normalized_status
+            return (
+                status.filled_quantity,
+                1 if status.is_terminal else 0,
+                terminal_rank.get(normalized, 0),
+            )
+
+        return max(statuses, key=lifecycle_key)
+
+    def _read_all_order_query_groups(self, *, history: bool) -> list[dict[str, Any]]:
+        groups: list[dict[str, Any]] = []
+        cursor: str | None = None
+        seen_cursors: set[str] = set()
+        for _ in range(OPEN_ORDER_MAX_PAGES):
+            if history:
+                response = self.get_order_history(
+                    page_size=OPEN_ORDER_PAGE_SIZE,
+                    last_client_order_id=cursor,
+                )
+            else:
+                response = self.get_open_orders(
+                    page_size=OPEN_ORDER_PAGE_SIZE,
+                    last_client_order_id=cursor,
+                )
+            page = _documented_order_groups(response)
+            groups.extend(page)
+            if len(page) < OPEN_ORDER_PAGE_SIZE:
+                return groups
+            next_cursor = page[-1]["client_order_id"]
+            if next_cursor == cursor or next_cursor in seen_cursors:
+                raise BrokerValidationError(
+                    "Webull order-query pagination repeated its cursor"
+                )
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+        raise BrokerValidationError(
+            "Webull order-query pagination exceeded the safety page limit"
+        )
 
     @staticmethod
     def _find_correlated_order(
