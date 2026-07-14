@@ -279,7 +279,7 @@ REPEAT_REQUEST_BODY = (
         (500, "", True),
         (417, REPEAT_REQUEST_BODY, True),      # Webull repeat-request throttle
         (417, "some other 417 reason", False),  # unrelated 417 = permanent
-        (429, "too many requests", False),      # other 4xx = permanent
+        (429, "too many requests", True),       # idempotent read rate limit
         (400, "bad request", False),
     ],
 )
@@ -300,6 +300,26 @@ def test_retry_recovers_from_repeat_request_throttle():
 
     with patch("broker.time.sleep"):
         assert broker._retry()(throttled)() == "ok"
+    assert calls == 2
+
+
+def test_retry_uses_longer_backoff_for_rate_limit():
+    calls = 0
+
+    def rate_limited():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise broker.BrokerHTTPError(429, "too many requests")
+        return "ok"
+
+    with (
+        patch("broker.random.uniform", return_value=0.0),
+        patch("broker.time.sleep") as sleep,
+    ):
+        assert broker._retry()(rate_limited)() == "ok"
+
+    sleep.assert_called_once_with(broker.RATE_LIMIT_BASE_DELAY_SECONDS)
     assert calls == 2
 
 

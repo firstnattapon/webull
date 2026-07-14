@@ -278,7 +278,11 @@ TERMINAL_ORDER_LIFECYCLE_STATUSES = frozenset({
     "PREVIEW_FAILED",
     "PREVIEW_REJECTED",
     "ORDER_FILLED",
+    "ORDER_FILLED_POSITION_UNAVAILABLE",
+    "ORDER_FILLED_POSITION_UNCONFIRMED",
     "ORDER_PARTIAL_FILLED_TERMINAL",
+    "ORDER_PARTIAL_POSITION_UNAVAILABLE",
+    "ORDER_PARTIAL_POSITION_UNCONFIRMED",
     "ORDER_NOT_FILLED",
     "ORDER_REJECTED",
     "ORDER_CANCELLED",
@@ -324,6 +328,7 @@ _PENDING_ORDER_CONTEXT_FIELDS = (
     "dna_signal",
     "not_found_attempts",
     "submission_unknown_at",
+    "position_reconcile_cycles",
 )
 
 _STATUS_PATTERN = re.compile(r"^[A-Z][A-Z0-9_ -]{0,63}$")
