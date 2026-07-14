@@ -32,6 +32,12 @@ class AppConfig:
     firestore_state_collection: str
     firestore_trade_collection: str
     firestore_state_document: str
+    # Width of one scheduler slot in seconds (e.g. 600 for a */10 cron).
+    # When > 0 the DNA step becomes idempotent per slot: an extra invocation
+    # inside an already-reserved slot (console Force run, duplicate fire)
+    # passes instead of consuming a step out of its trained slot.
+    # 0 keeps the historical one-step-per-invocation behavior.
+    schedule_slot_seconds: int = 0
 
     @property
     def dna_string(self) -> str:
@@ -230,6 +236,7 @@ def _build_app_config() -> AppConfig:
         or os.environ.get("DNA_CODE", DEFAULT_DNA_CODE).strip()
     )
     start_timestamp = _get_int("START_TIMESTAMP", str(DEFAULT_START_TIMESTAMP))
+    schedule_slot_seconds = _get_int("SCHEDULE_SLOT_SECONDS", "0")
 
     fix_c = _get_float("FIX_C", "1500.0")
     p0 = _get_float("P0", "6.88")
@@ -245,6 +252,8 @@ def _build_app_config() -> AppConfig:
         raise ValueError("DNA_STRING or DNA_CODE must be digits, bypass:N, or [1,N]")
     if start_timestamp < 0:
         raise ValueError("START_TIMESTAMP must be greater than or equal to 0")
+    if schedule_slot_seconds < 0:
+        raise ValueError("SCHEDULE_SLOT_SECONDS must be greater than or equal to 0")
 
     state_collection = os.environ.get(
         "FIRESTORE_STATE_COLLECTION",
@@ -279,6 +288,7 @@ def _build_app_config() -> AppConfig:
             "FIRESTORE_STATE_DOCUMENT",
             state_document,
         ),
+        schedule_slot_seconds=schedule_slot_seconds,
     )
 
 

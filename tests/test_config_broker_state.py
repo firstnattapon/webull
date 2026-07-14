@@ -323,6 +323,28 @@ def test_retry_uses_longer_backoff_for_rate_limit():
     assert calls == 2
 
 
+def test_retry_uses_longer_backoff_for_repeat_request_throttle():
+    """A retryable 417 re-arriving ~1s later can trip the same throttle again,
+    so it must back off with the rate-limit delay, not the ordinary one."""
+    calls = 0
+
+    def throttled():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise broker.BrokerHTTPError(417, REPEAT_REQUEST_BODY)
+        return "ok"
+
+    with (
+        patch("broker.random.uniform", return_value=0.0),
+        patch("broker.time.sleep") as sleep,
+    ):
+        assert broker._retry()(throttled)() == "ok"
+
+    sleep.assert_called_once_with(broker.RATE_LIMIT_BASE_DELAY_SECONDS)
+    assert calls == 2
+
+
 def test_failed_position_read_retries_only_position_not_successful_quote():
     position = Mock(side_effect=[
         broker.BrokerHTTPError(504, "gateway timeout"),
@@ -944,3 +966,79 @@ def test_reserve_step_does_not_write_after_timeline_end():
 def test_invalid_firestore_steps_are_rejected(value):
     with pytest.raises(state.StepReadError):
         state._parse_step(value)
+
+
+def test_reserve_step_records_slot_when_slot_guard_is_enabled():
+    document = FakeDocument(FakeSnapshot({"dna_step": 2}))
+    db = FakeDb(document)
+
+    with (
+        patch("state._get_firestore", return_value=(db, FakeFirestore)),
+        patch("state.time.time", return_value=6000.0),
+    ):
+        result = state.reserve_step(
+            "p", "c", "d", "s", "SMR", 5, lambda step: 1, slot_seconds=600
+        )
+
+    assert result == state.StepReservation(dna_step=2, dna_signal=1)
+    assert result.duplicate is False
+    assert db.txn.writes[0][1]["dna_step"] == 3
+    assert db.txn.writes[0][1]["last_reserved_slot"] == 10
+
+
+def test_reserve_step_skips_duplicate_invocation_inside_reserved_slot():
+    """A Force run / duplicate fire in an already-reserved slot consumes nothing."""
+    document = FakeDocument(FakeSnapshot({"dna_step": 3, "last_reserved_slot": 10}))
+    db = FakeDb(document)
+
+    with (
+        patch("state._get_firestore", return_value=(db, FakeFirestore)),
+        patch("state.time.time", return_value=6110.0),  # still inside slot 10
+    ):
+        result = state.reserve_step(
+            "p", "c", "d", "s", "SMR", 5, lambda step: 1, slot_seconds=600
+        )
+
+    assert result.duplicate is True
+    assert result.dna_signal == 0
+    assert db.txn.writes == []
+
+
+def test_reserve_step_advances_normally_in_the_next_slot():
+    document = FakeDocument(FakeSnapshot({"dna_step": 3, "last_reserved_slot": 10}))
+    db = FakeDb(document)
+
+    with (
+        patch("state._get_firestore", return_value=(db, FakeFirestore)),
+        patch("state.time.time", return_value=6600.0),  # slot 11
+    ):
+        result = state.reserve_step(
+            "p", "c", "d", "s", "SMR", 5, lambda step: 1, slot_seconds=600
+        )
+
+    assert result == state.StepReservation(dna_step=3, dna_signal=1)
+    assert db.txn.writes[0][1]["dna_step"] == 4
+    assert db.txn.writes[0][1]["last_reserved_slot"] == 11
+
+
+def test_reserve_step_without_slot_guard_never_writes_slot_field():
+    document = FakeDocument(FakeSnapshot({"dna_step": 2, "last_reserved_slot": 10}))
+    db = FakeDb(document)
+
+    with patch("state._get_firestore", return_value=(db, FakeFirestore)):
+        result = state.reserve_step("p", "c", "d", "s", "SMR", 5, lambda step: 1)
+
+    assert result.duplicate is False
+    assert result.dna_step == 2
+    assert "last_reserved_slot" not in db.txn.writes[0][1]
+
+
+def test_schedule_slot_seconds_is_parsed_and_validated(env, monkeypatch):
+    assert config.load_app_config(use_cache=False).schedule_slot_seconds == 0
+
+    monkeypatch.setenv("SCHEDULE_SLOT_SECONDS", "600")
+    assert config.load_app_config(use_cache=False).schedule_slot_seconds == 600
+
+    monkeypatch.setenv("SCHEDULE_SLOT_SECONDS", "-1")
+    with pytest.raises(ValueError, match="SCHEDULE_SLOT_SECONDS"):
+        config.load_app_config(use_cache=False)

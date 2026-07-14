@@ -993,8 +993,15 @@ def rebalance_trigger(request):
             symbol=config.symbol,
             dna_length=len(dna_array),
             signal_of=lambda step: int(dna_array[step]),
+            slot_seconds=config.schedule_slot_seconds,
         )
         dna_step = reservation.dna_step
+
+        # A console Force run or duplicate scheduler fire inside an
+        # already-reserved slot must not trade: consuming a second step would
+        # shift every remaining DNA signal off its trained time slot.
+        if reservation.duplicate:
+            return _ok("PASS_DUPLICATE_TICK", dna_step=dna_step)
 
         if dna_step >= len(dna_array):
             return _ok(
