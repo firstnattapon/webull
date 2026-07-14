@@ -95,6 +95,20 @@ def test_verify_fill_does_not_abandon_active_partial_fill():
     sleep.assert_called_once_with(main.FILL_VERIFICATION_INTERVAL_SECONDS)
 
 
+def test_verify_fill_does_not_multiply_exhausted_broker_retries():
+    broker_instance = Mock()
+    broker_instance.get_order_status.side_effect = BrokerError(
+        "order detail unavailable"
+    )
+
+    with patch("main.time.sleep") as sleep:
+        result = main._verify_fill(broker_instance, "id")
+
+    assert result is None
+    broker_instance.get_order_status.assert_called_once_with("id")
+    sleep.assert_not_called()
+
+
 def test_position_reconciliation_waits_for_positions_snapshot_to_update():
     broker_instance = Mock()
     broker_instance.get_position_quantity.side_effect = [4.773, 4.273]
@@ -121,7 +135,7 @@ def test_position_reconciliation_failure_is_best_effort():
     broker_instance = Mock()
     broker_instance.get_position_quantity.side_effect = BrokerError("positions unavailable")
 
-    with patch("main.time.sleep"):
+    with patch("main.time.sleep") as sleep:
         result = main._reconcile_position(
             broker_instance,
             symbol="AAPL",
@@ -133,6 +147,8 @@ def test_position_reconciliation_failure_is_best_effort():
     assert result["position_after"] is None
     assert result["position_reconciled"] is False
     assert result["position_reconcile_error"] == "BrokerError"
+    broker_instance.get_position_quantity.assert_called_once_with("AAPL")
+    sleep.assert_not_called()
 
 
 def test_position_reconciliation_rejects_unchanged_point_zero_one_fill():
@@ -242,9 +258,69 @@ def test_pending_filled_order_with_position_mismatch_stays_pending(app_config):
     payload = write_lifecycle.call_args.args[2]
     assert payload["status"] == "ORDER_FILLED_POSITION_PENDING"
     assert payload["position_reconciled"] is False
+    assert payload["position_reconcile_cycles"] == 1
     assert (
         broker_instance.get_position_quantity.call_count
         == main.POSITION_RECONCILIATION_ATTEMPTS
+    )
+
+
+def test_pending_filled_order_releases_lock_when_positions_unavailable(app_config):
+    broker_instance = Mock()
+    broker_instance.get_order_status.return_value = _filled_status(
+        client_order_id="pending-id", filled=1.0
+    )
+    broker_instance.get_position_quantity.side_effect = BrokerError(
+        "positions unavailable"
+    )
+    write_lifecycle = Mock()
+
+    with patch.object(main, "_write_lifecycle", write_lifecycle):
+        result = main._reconcile_pending_lifecycle(
+            app_config,
+            _broker_config(),
+            broker_instance,
+            _pending_order(status="ORDER_FILLED_POSITION_PENDING"),
+        )
+
+    assert result["terminal"] is True
+    assert result["status"] == "ORDER_FILLED_POSITION_UNAVAILABLE"
+    payload = write_lifecycle.call_args.args[2]
+    assert payload["position_reconcile_error"] == "BrokerError"
+    assert payload["position_reconcile_cycles"] == 1
+    broker_instance.get_position_quantity.assert_called_once_with("SMR")
+
+
+def test_pending_filled_order_releases_lock_after_bounded_stale_cycles(app_config):
+    broker_instance = Mock()
+    broker_instance.get_order_status.return_value = _filled_status(
+        client_order_id="pending-id", filled=1.0
+    )
+    broker_instance.get_position_quantity.return_value = 5.0
+    write_lifecycle = Mock()
+
+    with (
+        patch.object(main, "_write_lifecycle", write_lifecycle),
+        patch("main.time.sleep"),
+    ):
+        result = main._reconcile_pending_lifecycle(
+            app_config,
+            _broker_config(),
+            broker_instance,
+            _pending_order(
+                status="ORDER_FILLED_POSITION_PENDING",
+                position_reconcile_cycles=(
+                    main.POSITION_RECONCILIATION_MAX_CYCLES - 1
+                ),
+            ),
+        )
+
+    assert result["terminal"] is True
+    assert result["status"] == "ORDER_FILLED_POSITION_UNCONFIRMED"
+    payload = write_lifecycle.call_args.args[2]
+    assert (
+        payload["position_reconcile_cycles"]
+        == main.POSITION_RECONCILIATION_MAX_CYCLES
     )
 
 

@@ -54,7 +54,7 @@ from strategy import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("shannon_demon_dna")
 
-BOT_VERSION = "4.0.0"
+BOT_VERSION = "4.0.1"
 _started_at = time.time()
 
 # Webull limits Order Detail and Account Positions to two requests per two
@@ -66,6 +66,11 @@ FILL_VERIFICATION_ATTEMPTS = 3
 FILL_VERIFICATION_INTERVAL_SECONDS = 1.05
 POSITION_RECONCILIATION_ATTEMPTS = 3
 POSITION_RECONCILIATION_INTERVAL_SECONDS = 1.05
+# A terminal Webull order must not block every future DNA tick forever merely
+# because Positions is lagging. Successful-but-stale snapshots get a small,
+# cross-invocation grace window; an unavailable Positions endpoint is released
+# immediately because the next normal tick performs the same required read.
+POSITION_RECONCILIATION_MAX_CYCLES = 3
 # Orders are formatted to five decimal places. Keep tolerance below the
 # smallest meaningful 0.00001-share movement so an unchanged snapshot can
 # never validate a fractional fill.
@@ -235,10 +240,20 @@ def _verify_fill(broker, client_order_id: str):
     for attempt in range(1, FILL_VERIFICATION_ATTEMPTS + 1):
         try:
             latest = broker.get_order_status(client_order_id)
-        except Exception:
+        except Exception as exc:
             # SDK/network failures should already be BrokerError subclasses,
             # but this guard keeps verification genuinely best-effort even if
             # an unexpected response shape slips through.
+            if isinstance(exc, BrokerError):
+                # get_order_status already exhausted the broker retry policy.
+                # Re-entering it from this poll loop would multiply one
+                # upstream outage into as many as nine Order Detail calls.
+                logger.warning(
+                    "Could not verify fill for order %s (%s)",
+                    client_order_id,
+                    exc.__class__.__name__,
+                )
+                break
             logger.warning(
                 "Could not verify fill for order %s (attempt %d/%d)",
                 client_order_id,
@@ -294,13 +309,23 @@ def _reconcile_position(
             position_after = float(broker.get_position_quantity(symbol))
         except Exception as exc:
             last_error = exc
-            logger.warning(
-                "Could not reconcile position for %s (attempt %d/%d)",
-                symbol,
-                attempt,
-                POSITION_RECONCILIATION_ATTEMPTS,
-                exc_info=True,
-            )
+            if isinstance(exc, BrokerError):
+                # The broker read already exhausted its own retry policy. Do
+                # not multiply three broker attempts by three reconciliation
+                # attempts, and do not send an expected transient traceback to
+                # Cloud Error Reporting.
+                logger.warning(
+                    "Could not reconcile position for %s (%s)",
+                    symbol,
+                    exc.__class__.__name__,
+                )
+            else:
+                logger.warning(
+                    "Could not reconcile position for %s",
+                    symbol,
+                    exc_info=True,
+                )
+            break
         else:
             last_error = None
             result["position_after"] = position_after
@@ -328,6 +353,36 @@ def _reconcile_position(
             "has not reached the expected quantity yet"
         )
     return result
+
+
+def _terminal_fill_lifecycle_status(
+    reconciliation: dict[str, Any],
+    *,
+    partial: bool,
+    previous_cycles: int = 0,
+) -> tuple[str, bool, int]:
+    """Choose a bounded terminal-fill status without creating a deadlock.
+
+    Order detail is authoritative for whether the order can execute again.
+    Positions is a separate observation used by the dashboard and strategy.
+    We retain a short grace window for a readable but stale snapshot, while an
+    unavailable endpoint cannot safely justify holding the global order lock.
+    """
+    cycles = max(0, previous_cycles) + 1
+    prefix = "ORDER_PARTIAL" if partial else "ORDER_FILLED"
+    if reconciliation.get("position_reconciled") is True:
+        status = "ORDER_PARTIAL_FILLED_TERMINAL" if partial else "ORDER_FILLED"
+        return status, True, cycles
+    if reconciliation.get("position_after") is None:
+        return f"{prefix}_POSITION_UNAVAILABLE", True, cycles
+    if cycles >= POSITION_RECONCILIATION_MAX_CYCLES:
+        return f"{prefix}_POSITION_UNCONFIRMED", True, cycles
+    pending = (
+        "ORDER_PARTIAL_POSITION_PENDING"
+        if partial
+        else "ORDER_FILLED_POSITION_PENDING"
+    )
+    return pending, False, cycles
 
 
 def _pending_number(pending: dict[str, Any], name: str) -> float:
@@ -475,26 +530,37 @@ def _reconcile_pending_lifecycle(
             filled_quantity=detail.filled_quantity,
         )
 
+    try:
+        previous_reconcile_cycles = int(
+            pending.get("position_reconcile_cycles", 0)
+        )
+    except (TypeError, ValueError):
+        previous_reconcile_cycles = 0
+
     if detail.is_filled:
         outcome = "ORDER_FILLED"
-        # A readable snapshot is not enough: it may still be the pre-fill value.
-        # Keep the deterministic lifecycle pending until the observed delta
-        # matches the exact cumulative fill.
-        terminal = reconciliation.get("position_reconciled") is True
-        lifecycle_status = (
-            "ORDER_FILLED" if terminal else "ORDER_FILLED_POSITION_PENDING"
+        lifecycle_status, terminal, reconcile_cycles = (
+            _terminal_fill_lifecycle_status(
+                reconciliation,
+                partial=False,
+                previous_cycles=previous_reconcile_cycles,
+            )
         )
+        reconciliation["position_reconcile_cycles"] = reconcile_cycles
     elif detail.is_terminal_unfilled:
         outcome = "ORDER_NOT_FILLED"
         terminal = True
         lifecycle_status = "ORDER_NOT_FILLED"
     elif detail.is_terminal and detail.has_fill:
         outcome = "ORDER_PARTIAL_FILLED"
-        terminal = reconciliation.get("position_reconciled") is True
-        lifecycle_status = (
-            "ORDER_PARTIAL_FILLED_TERMINAL"
-            if terminal else "ORDER_PARTIAL_POSITION_PENDING"
+        lifecycle_status, terminal, reconcile_cycles = (
+            _terminal_fill_lifecycle_status(
+                reconciliation,
+                partial=True,
+                previous_cycles=previous_reconcile_cycles,
+            )
         )
+        reconciliation["position_reconcile_cycles"] = reconcile_cycles
     elif detail.is_partial_fill:
         outcome = "ORDER_PARTIAL_FILLED"
         lifecycle_status = "ORDER_PARTIAL_FILLED"
@@ -775,11 +841,13 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
                 order_log["market_state"] = post_order_market_state
 
         if fill.is_filled:
-            lifecycle_status = (
-                "ORDER_FILLED"
-                if order_log.get("position_reconciled") is True
-                else "ORDER_FILLED_POSITION_PENDING"
+            lifecycle_status, _, reconcile_cycles = (
+                _terminal_fill_lifecycle_status(
+                    reconciliation,
+                    partial=False,
+                )
             )
+            order_log["position_reconcile_cycles"] = reconcile_cycles
         elif fill.is_terminal_unfilled:
             lifecycle_status = "ORDER_NOT_FILLED"
             order_log["non_fill_verified"] = True
@@ -788,11 +856,13 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
                 f"{fill.status!r} with 0 filled — the held quantity did not move"
             )
         elif fill.is_terminal and fill.has_fill:
-            lifecycle_status = (
-                "ORDER_PARTIAL_FILLED_TERMINAL"
-                if order_log.get("position_reconciled") is True
-                else "ORDER_PARTIAL_POSITION_PENDING"
+            lifecycle_status, _, reconcile_cycles = (
+                _terminal_fill_lifecycle_status(
+                    reconciliation,
+                    partial=True,
+                )
             )
+            order_log["position_reconcile_cycles"] = reconcile_cycles
             order_log["partial_fill_terminal_status"] = fill.status
         elif fill.is_partial_fill:
             lifecycle_status = "ORDER_PARTIAL_FILLED"

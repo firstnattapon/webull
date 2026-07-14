@@ -193,14 +193,43 @@ def test_read_pending_order_returns_detached_copy_or_none(fake_firestore):
     assert second["status"] == "SUBMITTED"
 
 
-def test_terminal_update_atomically_clears_pending_order(fake_firestore):
+def test_pending_position_reconcile_cycle_is_mirrored_to_state(fake_firestore):
+    write_lifecycle(
+        "client-order-cycle",
+        {
+            "status": "ORDER_FILLED_POSITION_PENDING",
+            "position_reconcile_cycles": 2,
+        },
+    )
+
+    pending = state.read_pending_order(
+        "project", "strategy_state", "strategy_SMR"
+    )
+
+    assert pending is not None
+    assert pending["position_reconcile_cycles"] == 2
+
+
+@pytest.mark.parametrize(
+    "terminal_status",
+    [
+        "FILLED",
+        "ORDER_FILLED_POSITION_UNAVAILABLE",
+        "ORDER_FILLED_POSITION_UNCONFIRMED",
+        "ORDER_PARTIAL_POSITION_UNAVAILABLE",
+        "ORDER_PARTIAL_POSITION_UNCONFIRMED",
+    ],
+)
+def test_terminal_update_atomically_clears_pending_order(
+    fake_firestore, terminal_status
+):
     lifecycle_id = write_lifecycle(
         "client-order-3",
         {"status": "SUBMITTED", "order_id": "webull-order-3"},
     )
     write_lifecycle(
         "client-order-3",
-        {"status": "FILLED", "filled_quantity": 1.0},
+        {"status": terminal_status, "filled_quantity": 1.0},
     )
 
     terminal_transaction = fake_firestore.transactions[-1]
@@ -210,8 +239,8 @@ def test_terminal_update_atomically_clears_pending_order(fake_firestore):
 
     lifecycle = fake_firestore.documents[("trades", lifecycle_id)]
     strategy_state = fake_firestore.documents[("strategy_state", "strategy_SMR")]
-    assert lifecycle["status"] == "FILLED"
-    assert strategy_state["last_status"] == "FILLED"
+    assert lifecycle["status"] == terminal_status
+    assert strategy_state["last_status"] == terminal_status
     assert "pending_order" not in strategy_state
     assert state.read_pending_order(
         "project", "strategy_state", "strategy_SMR"

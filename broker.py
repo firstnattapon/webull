@@ -1,7 +1,7 @@
 """Unified Webull broker — single source of truth for all API interactions.
 
 Single ``WebullBroker`` class with:
-  - retry for idempotent reads only (3x jittered backoff on HTTP 5xx,
+  - retry for idempotent reads only (3x jittered backoff on HTTP 429/5xx,
     network errors, and Webull's 417 OPENAPI_REPEAT_REQUEST throttle);
     order placement is submitted exactly once and never resubmitted
   - Manual-compatible sequential position + quote reads through one gateway
@@ -517,12 +517,15 @@ def _format_order_quantity(quantity: float) -> str:
 # Each SDK request is signed with a fresh nonce, so this is server-side
 # idempotency keyed on request content, not a signing artefact.
 REPEAT_REQUEST_CODE = "OPENAPI_REPEAT_REQUEST"
+RATE_LIMIT_BASE_DELAY_SECONDS = 5.0
 
 
 def _is_retryable_http(exc: BrokerHTTPError) -> bool:
     """Whether an HTTP error is a transient condition worth retrying.
 
     * 5xx — upstream server/gateway failure (e.g. 504 GATEWAY_TIMEOUT).
+    * 429 — Webull's ordinary rate limit. Retrying is safe here because this
+      policy is attached only to idempotent reads and previews.
     * 417 OPENAPI_REPEAT_REQUEST — Webull throttling a request that arrived
       too close to an identical recent one. For an idempotent read this is a
       timing artefact (often provoked by our own retry), so we back off and
@@ -534,10 +537,17 @@ def _is_retryable_http(exc: BrokerHTTPError) -> bool:
     """
     if exc.status_code >= 500:
         return True
+    if exc.status_code == 429:
+        return True
     return exc.status_code == 417 and REPEAT_REQUEST_CODE in (exc.body or "")
 
 
-def _retry(max_attempts: int = 3, base_delay: float = 1.0, max_jitter: float = 0.5):
+def _retry(
+    max_attempts: int = 3,
+    base_delay: float = 1.0,
+    max_jitter: float = 0.5,
+    rate_limit_base_delay: float = RATE_LIMIT_BASE_DELAY_SECONDS,
+):
     """Decorator: retry an *idempotent* call with jittered exponential backoff.
 
     Retries transient ``BrokerHTTPError`` (see ``_is_retryable_http``) and
@@ -546,8 +556,11 @@ def _retry(max_attempts: int = 3, base_delay: float = 1.0, max_jitter: float = 0
     very failure a naive fixed backoff caused in production.
     """
 
-    def _backoff(attempt: int) -> float:
-        return base_delay * (2 ** attempt) + random.uniform(0.0, max_jitter)
+    def _backoff(attempt: int, status_code: int | None = None) -> float:
+        delay_base = (
+            rate_limit_base_delay if status_code == 429 else base_delay
+        )
+        return delay_base * (2 ** attempt) + random.uniform(0.0, max_jitter)
 
     def decorator(fn):
         @functools.wraps(fn)
@@ -562,7 +575,7 @@ def _retry(max_attempts: int = 3, base_delay: float = 1.0, max_jitter: float = 0
                         _record_metric("errors")
                         raise  # permanent 4xx = don't retry
                     if attempt < max_attempts - 1:
-                        delay = _backoff(attempt)
+                        delay = _backoff(attempt, exc.status_code)
                         _record_metric("retries")
                         logger.warning(
                             "Retry %d/%d for %s after %.1fs (HTTP %d)",
