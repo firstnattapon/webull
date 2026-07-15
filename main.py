@@ -66,11 +66,10 @@ FILL_VERIFICATION_ATTEMPTS = 3
 FILL_VERIFICATION_INTERVAL_SECONDS = 1.05
 POSITION_RECONCILIATION_ATTEMPTS = 3
 POSITION_RECONCILIATION_INTERVAL_SECONDS = 1.05
-# A terminal Webull order must not block every future DNA tick forever merely
-# because Positions is lagging. Successful-but-stale snapshots get a small,
-# cross-invocation grace window; an unavailable Positions endpoint is released
-# immediately because the next normal tick performs the same required read.
-POSITION_RECONCILIATION_MAX_CYCLES = 3
+# Reconciliation stays pending until Webull Positions confirms the fill.  The
+# cycle threshold is diagnostic only: it raises a manual-review flag but never
+# releases the safety gate or authorizes another order.
+POSITION_RECONCILIATION_ALERT_CYCLES = 5
 # Orders are formatted to five decimal places. Keep tolerance below the
 # smallest meaningful 0.00001-share movement so an unchanged snapshot can
 # never validate a fractional fill.
@@ -300,6 +299,7 @@ def _reconcile_position(
         "position_after": None,
         "position_delta": None,
         "position_reconciled": False,
+        "position_sync_status": "PENDING",
         "position_reconcile_epsilon": POSITION_RECONCILIATION_EPSILON,
     }
 
@@ -338,6 +338,7 @@ def _reconcile_position(
                 <= POSITION_RECONCILIATION_EPSILON
             ):
                 result["position_reconciled"] = True
+                result["position_sync_status"] = "CONFIRMED"
                 return result
 
         if attempt < POSITION_RECONCILIATION_ATTEMPTS:
@@ -347,11 +348,13 @@ def _reconcile_position(
         # Persist only the exception class. Even unexpected library errors may
         # carry response bodies or signed request context in their message.
         result["position_reconcile_error"] = last_error.__class__.__name__
+        result["position_sync_status"] = "UNAVAILABLE"
     else:
         result["position_reconcile_note"] = (
             "Order detail reports a fill, but the latest Positions snapshot "
             "has not reached the expected quantity yet"
         )
+        result["position_sync_status"] = "MISMATCH"
     return result
 
 
@@ -361,22 +364,17 @@ def _terminal_fill_lifecycle_status(
     partial: bool,
     previous_cycles: int = 0,
 ) -> tuple[str, bool, int]:
-    """Choose a bounded terminal-fill status without creating a deadlock.
+    """Keep a verified fill pending until Positions confirms its exact delta.
 
-    Order detail is authoritative for whether the order can execute again.
-    Positions is a separate observation used by the dashboard and strategy.
-    We retain a short grace window for a readable but stale snapshot, while an
-    unavailable endpoint cannot safely justify holding the global order lock.
+    Order detail can prove that execution is terminal, but it cannot prove the
+    current holding.  Unavailable or stale Positions observations therefore
+    remain nonterminal for the strategy gate and are retried on later scheduler
+    invocations.  ``cycles`` is used only for observability/manual escalation.
     """
     cycles = max(0, previous_cycles) + 1
-    prefix = "ORDER_PARTIAL" if partial else "ORDER_FILLED"
     if reconciliation.get("position_reconciled") is True:
         status = "ORDER_PARTIAL_FILLED_TERMINAL" if partial else "ORDER_FILLED"
         return status, True, cycles
-    if reconciliation.get("position_after") is None:
-        return f"{prefix}_POSITION_UNAVAILABLE", True, cycles
-    if cycles >= POSITION_RECONCILIATION_MAX_CYCLES:
-        return f"{prefix}_POSITION_UNCONFIRMED", True, cycles
     pending = (
         "ORDER_PARTIAL_POSITION_PENDING"
         if partial
@@ -547,6 +545,9 @@ def _reconcile_pending_lifecycle(
             )
         )
         reconciliation["position_reconcile_cycles"] = reconcile_cycles
+        reconciliation["manual_resolution_required"] = (
+            reconcile_cycles >= POSITION_RECONCILIATION_ALERT_CYCLES
+        )
     elif detail.is_terminal_unfilled:
         outcome = "ORDER_NOT_FILLED"
         terminal = True
@@ -561,6 +562,9 @@ def _reconcile_pending_lifecycle(
             )
         )
         reconciliation["position_reconcile_cycles"] = reconcile_cycles
+        reconciliation["manual_resolution_required"] = (
+            reconcile_cycles >= POSITION_RECONCILIATION_ALERT_CYCLES
+        )
     elif detail.is_partial_fill:
         outcome = "ORDER_PARTIAL_FILLED"
         lifecycle_status = "ORDER_PARTIAL_FILLED"
@@ -584,6 +588,7 @@ def _reconcile_pending_lifecycle(
         "broker_endpoint": broker_config.endpoint,
         "account_fingerprint": current_account,
         "order_status": detail.to_dict(),
+        "execution_terminal": detail.is_terminal,
         **reconciliation,
     }
 
@@ -610,6 +615,10 @@ def _reconcile_pending_lifecycle(
         "filled_quantity": detail.filled_quantity,
         "position_after": position_after,
         "position_reconciled": reconciliation.get("position_reconciled"),
+        "position_sync_status": reconciliation.get("position_sync_status"),
+        "manual_resolution_required": reconciliation.get(
+            "manual_resolution_required", False
+        ),
     }
 
 
@@ -727,6 +736,7 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
         "account_fingerprint": str(
             getattr(broker_config, "account_fingerprint", "")
         ),
+        "execution_terminal": False,
     }
 
     # Persist the intent before preview/submission.  If the process dies after
@@ -813,6 +823,7 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
         order_log["filled_quantity"] = fill.filled_quantity
         order_log["order_detail_verified"] = True
         order_log["fill_verified"] = fill.is_filled
+        order_log["execution_terminal"] = fill.is_terminal
         if fill.has_fill:
             reconciliation = _reconcile_position(
                 broker,
@@ -848,6 +859,9 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
                 )
             )
             order_log["position_reconcile_cycles"] = reconcile_cycles
+            order_log["manual_resolution_required"] = (
+                reconcile_cycles >= POSITION_RECONCILIATION_ALERT_CYCLES
+            )
         elif fill.is_terminal_unfilled:
             lifecycle_status = "ORDER_NOT_FILLED"
             order_log["non_fill_verified"] = True
@@ -863,6 +877,9 @@ def _execute_signal(config: AppConfig, reserved: StepReservation):
                 )
             )
             order_log["position_reconcile_cycles"] = reconcile_cycles
+            order_log["manual_resolution_required"] = (
+                reconcile_cycles >= POSITION_RECONCILIATION_ALERT_CYCLES
+            )
             order_log["partial_fill_terminal_status"] = fill.status
         elif fill.is_partial_fill:
             lifecycle_status = "ORDER_PARTIAL_FILLED"

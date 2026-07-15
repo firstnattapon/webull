@@ -214,10 +214,8 @@ def test_pending_position_reconcile_cycle_is_mirrored_to_state(fake_firestore):
     "terminal_status",
     [
         "FILLED",
-        "ORDER_FILLED_POSITION_UNAVAILABLE",
-        "ORDER_FILLED_POSITION_UNCONFIRMED",
-        "ORDER_PARTIAL_POSITION_UNAVAILABLE",
-        "ORDER_PARTIAL_POSITION_UNCONFIRMED",
+        "ORDER_FILLED",
+        "ORDER_PARTIAL_FILLED_TERMINAL",
     ],
 )
 def test_terminal_update_atomically_clears_pending_order(
@@ -245,6 +243,81 @@ def test_terminal_update_atomically_clears_pending_order(
     assert state.read_pending_order(
         "project", "strategy_state", "strategy_SMR"
     ) is None
+
+
+@pytest.mark.parametrize(
+    "legacy_status",
+    sorted(state.LEGACY_UNVERIFIED_POSITION_STATUSES),
+)
+def test_legacy_unverified_position_status_remains_reconcilable(
+    fake_firestore, legacy_status
+):
+    lifecycle_id = write_lifecycle(
+        "legacy-order",
+        {"status": "ORDER_SUBMITTED", "filled_quantity": 0.0},
+    )
+    write_lifecycle(
+        "legacy-order",
+        {
+            "status": legacy_status,
+            "filled_quantity": 1.0,
+            "position_reconciled": False,
+            "position_sync_status": "UNAVAILABLE",
+        },
+    )
+
+    lifecycle = fake_firestore.documents[("trades", lifecycle_id)]
+    pending = state.read_pending_order(
+        "project", "strategy_state", "strategy_SMR"
+    )
+
+    assert lifecycle["status"] == legacy_status
+    assert pending is not None
+    assert pending["client_order_id"] == "legacy-order"
+    assert pending["position_sync_status"] == "UNAVAILABLE"
+
+
+def test_position_observation_updates_latest_market_state(fake_firestore):
+    lifecycle_id = write_lifecycle(
+        "observed-order",
+        {
+            "status": "ORDER_CREATED",
+            "pre_order_market_state": {"quantity": 5.0, "last_price": 100.0},
+        },
+    )
+
+    initial_state = fake_firestore.documents[("strategy_state", "strategy_SMR")]
+    assert initial_state["latest_market_state"] == {
+        "quantity": 5.0,
+        "last_price": 100.0,
+        "source": "webull_positions",
+        "observed_at": FakeFirestore.SERVER_TIMESTAMP,
+        "client_order_id": "observed-order",
+    }
+
+    write_lifecycle(
+        "observed-order",
+        {
+            "status": "ORDER_FILLED_POSITION_PENDING",
+            "filled_quantity": 1.0,
+            "position_after": 5.0,
+            "position_reconciled": False,
+            "position_sync_status": "MISMATCH",
+            "last_price": 101.0,
+        },
+    )
+
+    lifecycle = fake_firestore.documents[("trades", lifecycle_id)]
+    strategy_state = fake_firestore.documents[("strategy_state", "strategy_SMR")]
+    assert lifecycle["position_observed_at"] == FakeFirestore.SERVER_TIMESTAMP
+    assert strategy_state["latest_market_state"] == {
+        "quantity": 5.0,
+        "last_price": 101.0,
+        "source": "webull_positions",
+        "observed_at": FakeFirestore.SERVER_TIMESTAMP,
+        "client_order_id": "observed-order",
+        "position_reconciled": False,
+    }
 
 
 @pytest.mark.parametrize(

@@ -310,11 +310,7 @@ TERMINAL_ORDER_LIFECYCLE_STATUSES = frozenset({
     "PREVIEW_FAILED",
     "PREVIEW_REJECTED",
     "ORDER_FILLED",
-    "ORDER_FILLED_POSITION_UNAVAILABLE",
-    "ORDER_FILLED_POSITION_UNCONFIRMED",
     "ORDER_PARTIAL_FILLED_TERMINAL",
-    "ORDER_PARTIAL_POSITION_UNAVAILABLE",
-    "ORDER_PARTIAL_POSITION_UNCONFIRMED",
     "ORDER_NOT_FILLED",
     "ORDER_REJECTED",
     "ORDER_CANCELLED",
@@ -322,6 +318,17 @@ TERMINAL_ORDER_LIFECYCLE_STATUSES = frozenset({
     "ORDER_FAILED",
     "ORDER_EXPIRED",
     "ORDER_PRE_SUBMIT_FAILED",
+})
+
+# Releases before the durable reconciliation loop used these labels as terminal
+# outcomes.  They remain readable and upgradable, but they are deliberately not
+# terminal anymore: a verified fill must stay pending until Webull Positions
+# confirms the exact quantity delta.
+LEGACY_UNVERIFIED_POSITION_STATUSES = frozenset({
+    "ORDER_FILLED_POSITION_UNAVAILABLE",
+    "ORDER_FILLED_POSITION_UNCONFIRMED",
+    "ORDER_PARTIAL_POSITION_UNAVAILABLE",
+    "ORDER_PARTIAL_POSITION_UNCONFIRMED",
 })
 
 # Only compare statuses that this service emits (plus the Webull labels used by
@@ -339,7 +346,11 @@ _ORDER_LIFECYCLE_PROGRESS = {
     "PARTIALLY_FILLED": 40,
     "ORDER_PARTIAL_FILLED": 40,
     "ORDER_PARTIAL_POSITION_PENDING": 50,
+    "ORDER_PARTIAL_POSITION_UNAVAILABLE": 50,
+    "ORDER_PARTIAL_POSITION_UNCONFIRMED": 50,
     "ORDER_FILLED_POSITION_PENDING": 60,
+    "ORDER_FILLED_POSITION_UNAVAILABLE": 60,
+    "ORDER_FILLED_POSITION_UNCONFIRMED": 60,
 }
 
 # Minimal, non-secret context needed to reconcile the same intent on a later
@@ -361,6 +372,12 @@ _PENDING_ORDER_CONTEXT_FIELDS = (
     "not_found_attempts",
     "submission_unknown_at",
     "position_reconcile_cycles",
+    "expected_position_after",
+    "position_after",
+    "position_reconciled",
+    "position_sync_status",
+    "execution_terminal",
+    "manual_resolution_required",
 )
 
 _STATUS_PATTERN = re.compile(r"^[A-Z][A-Z0-9_ -]{0,63}$")
@@ -402,6 +419,7 @@ _RESERVED_LIFECYCLE_KEYS = frozenset({
     "state_document",
     "created_at",
     "updated_at",
+    "position_observed_at",
     "lifecycle_document_id",
     "pending_order",
 })
@@ -538,6 +556,58 @@ def _lifecycle_filled_quantity(payload: dict[str, Any]) -> float:
     return number if math.isfinite(number) and number >= 0 else 0.0
 
 
+def _finite_snapshot_number(
+    value: Any,
+    *,
+    allow_zero: bool,
+) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if not math.isfinite(number):
+        return None
+    if number < 0 or (not allow_zero and number == 0):
+        return None
+    return number
+
+
+def _latest_market_state(
+    snapshot: Any,
+    firestore_module: Any,
+    *,
+    client_order_id: str | None = None,
+    position_reconciled: bool | None = None,
+) -> dict[str, Any] | None:
+    """Normalize one successful Webull Positions observation for state.
+
+    This state is explicitly observational.  ``expected_position_after`` is
+    never accepted here, so an order fill cannot manufacture a holding that
+    Webull Positions did not return.
+    """
+    if not isinstance(snapshot, dict):
+        return None
+    quantity = _finite_snapshot_number(snapshot.get("quantity"), allow_zero=True)
+    if quantity is None:
+        return None
+
+    latest: dict[str, Any] = {
+        "quantity": quantity,
+        "source": "webull_positions",
+        "observed_at": firestore_module.SERVER_TIMESTAMP,
+    }
+    last_price = _finite_snapshot_number(
+        snapshot.get("last_price"),
+        allow_zero=False,
+    )
+    if last_price is not None:
+        latest["last_price"] = last_price
+    if client_order_id:
+        latest["client_order_id"] = client_order_id
+    if isinstance(position_reconciled, bool):
+        latest["position_reconciled"] = position_reconciled
+    return latest
+
+
 def _order_lifecycle_document_id(client_order_id: str) -> str:
     digest = hashlib.sha256(client_order_id.encode("utf-8")).hexdigest()
     return f"order_{digest}"
@@ -654,6 +724,14 @@ def write_order_lifecycle(
                 "updated_at": firestore_module.SERVER_TIMESTAMP,
                 **lifecycle_payload,
             }
+            position_after = _finite_snapshot_number(
+                lifecycle_payload.get("position_after"),
+                allow_zero=True,
+            )
+            if position_after is not None:
+                log_payload["position_observed_at"] = (
+                    firestore_module.SERVER_TIMESTAMP
+                )
             if not snapshot.exists:
                 log_payload["created_at"] = firestore_module.SERVER_TIMESTAMP
 
@@ -663,6 +741,31 @@ def write_order_lifecycle(
                 "last_status": status,
                 "last_logged_at": firestore_module.SERVER_TIMESTAMP,
             }
+            latest_market_state = None
+            if position_after is not None:
+                latest_market_state = _latest_market_state(
+                    {
+                        "quantity": position_after,
+                        "last_price": lifecycle_payload.get("last_price"),
+                    },
+                    firestore_module,
+                    client_order_id=normalized_client_order_id,
+                    position_reconciled=lifecycle_payload.get(
+                        "position_reconciled"
+                    ),
+                )
+            elif status == "ORDER_CREATED":
+                # ORDER_CREATED is written immediately after a successful
+                # position+quote read and before submission.  Later lifecycle
+                # writes must not re-stamp that pre-order snapshot as fresh.
+                latest_market_state = _latest_market_state(
+                    lifecycle_payload.get("pre_order_market_state")
+                    or lifecycle_payload.get("market_state"),
+                    firestore_module,
+                    client_order_id=normalized_client_order_id,
+                )
+            if latest_market_state is not None:
+                state_payload["latest_market_state"] = latest_market_state
             if status in TERMINAL_ORDER_LIFECYCLE_STATUSES:
                 state_payload["pending_order"] = firestore_module.DELETE_FIELD
             else:
@@ -842,12 +945,19 @@ def _write_trade_log_sync(
         if state_collection:
             batch = db.batch()
             batch.set(log_ref, log_payload)
+            state_payload: dict[str, Any] = {
+                "last_status": str(payload.get("status", "UNKNOWN")),
+                "last_logged_at": firestore_module.SERVER_TIMESTAMP,
+            }
+            latest_market_state = _latest_market_state(
+                payload.get("market_state"),
+                firestore_module,
+            )
+            if latest_market_state is not None:
+                state_payload["latest_market_state"] = latest_market_state
             batch.set(
                 db.collection(state_collection).document(state_document),
-                {
-                    "last_status": str(payload.get("status", "UNKNOWN")),
-                    "last_logged_at": firestore_module.SERVER_TIMESTAMP,
-                },
+                state_payload,
                 merge=True,
             )
             batch.commit()
