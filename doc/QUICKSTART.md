@@ -148,6 +148,36 @@ WEBULL_APP_SECRET=YOUR_PRODUCTION_APP_SECRET
 
 Production endpoint ต้องแสดงเป็น `api.webull.co.th` ห้ามใช้ UAT credentials กับ Production
 
+## Position reconciliation หลัง filled order
+
+`FILLED` ยืนยัน execution เท่านั้น ยังไม่ยืนยันจำนวนถือครอง ระบบจะคง `pending_order` และตอบสถานะ `ORDER_FILLED_POSITION_PENDING` หรือ `ORDER_PARTIAL_POSITION_PENDING` จนกว่า Webull Positions จะยืนยัน delta ภายใน `1e-6` หุ้น
+
+- `position_sync_status=UNAVAILABLE`: อ่าน Positions ไม่สำเร็จ เช่น transient HTTP 504
+- `position_sync_status=MISMATCH`: อ่านสำเร็จแต่ snapshot ยังไม่ตรงกับ fill
+- `position_sync_status=CONFIRMED`: delta ตรงและ lifecycle จึงเป็น terminal ได้
+- `position_reconcile_cycles` เป็นตัวนับสำหรับ alert เท่านั้น ห้ามใช้ปลด safety gate
+- ระหว่าง pending ระบบ reconcile exact `client_order_id` ก่อน timestamp, market และ DNA gates ทุก invocation และไม่ส่ง replacement/corrective order อัตโนมัติ
+
+Dashboard ใช้ `position_after` หรือ quantity snapshot ที่มาจาก Webull Positions เป็น “จำนวนถือครอง (หุ้น)” เท่านั้น ส่วน `expected_position_after` แสดงเพื่อวินิจฉัยและห้ามใช้เป็น verified holdings หรือ realized cash
+
+### Dry-run ซ่อม lifecycle เก่า
+
+ตรวจแผนโดยไม่เขียน Firestore และไม่เรียก Webull:
+
+```powershell
+python scripts/repair_position_reconciliation.py --project-id YOUR_PROJECT_ID --state-document SHANNON_DEMON_DNA_SMR
+```
+
+เมื่อทบทวน output แล้วจึงอนุญาต write อย่างชัดเจน:
+
+```powershell
+python scripts/repair_position_reconciliation.py --project-id YOUR_PROJECT_ID --state-document SHANNON_DEMON_DNA_SMR --apply
+```
+
+เครื่องมือ requeue ได้เฉพาะ filled legacy row ล่าสุดที่มี context ครบและไม่มี subsequent fill; แถวที่พิสูจน์ย้อนหลังไม่ได้จะเป็น `LEGACY_UNVERIFIED` การอ่าน Positions สดและเติม `latest_market_state` เกิดจาก bot invocation ถัดไปหลัง requeue ไม่ใช่จากการคำนวณ order history
+
+> ก่อน live validation ต้อง revoke/rotate credential ที่เคยเปิดเผย ใช้ credential ใหม่จาก secret storage เท่านั้น และ deploy bot ก่อน Dashboard
+
 ## Checklist
 
 - [ ] Firestore `(default)` พร้อมใช้งาน
